@@ -100,26 +100,6 @@ When you run DRCV, it will show all available access methods:
 - **Local Network**: `http://192.168.1.100:8080` (other devices on same WiFi/LAN)
 - **External**: `https://abc123.drcv.app` (tunnel mode only)
 
-## Multiple Instances (NAT Environment)
-
-If running multiple DRCV instances behind the same router:
-
-```bash
-# Host A
-cargo run -- --tunnel --upload-port 8080
-
-# Host B  
-cargo run -- --tunnel --upload-port 8081
-
-# Host C
-cargo run -- --tunnel --upload-port 8082
-```
-
-Each instance gets a unique subdomain:
-- Host A: `https://abc123.drcv.app`
-- Host B: `https://def456.drcv.app`  
-- Host C: `https://ghi789.drcv.app`
-
 ## Security
 
 ### Built-in Protections
@@ -146,12 +126,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, API documentation,
 
 MIT License - see [LICENSE](LICENSE) for details.
 
-## Changelog
-
-### v0.1.0
-- Initial release
-- Basic resumable upload functionality
-- Admin dashboard
-- Tunnel mode for external access
-- UPnP port forwarding
-- Multi-instance NAT support
