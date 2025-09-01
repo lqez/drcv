@@ -5,7 +5,7 @@ compatibility_date = "2024-01-01"
 # KV 스토리지 바인딩
 [[kv_namespaces]]
 binding = "TUNNEL_MAPPINGS"
-id = "YOUR_KV_NAMESPACE_ID" # wrangler kv:namespace create 후 업데이트
+id = "b89da5d6ce3140cb86afcea9dec16766" # wrangler kv:namespace create 후 업데이트
 
 # 환경 변수 (secrets로 설정)
 # wrangler secret put CLOUDFLARE_ZONE_ID
