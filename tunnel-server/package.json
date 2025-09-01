@@ -1,0 +1,14 @@
+{
+  "name": "drcv-tunnel-server",
+  "version": "1.0.0",
+  "description": "DRCV Tunnel Server - Cloudflare Workers",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "setup": "./setup.sh"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
