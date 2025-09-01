@@ -31,6 +31,10 @@
     const btn = document.getElementById('uploadBtn');
     const progressContainer = document.getElementById('progress-container');
     const historyList = document.getElementById('history');
+    
+    // 활성 업로드 ID들 관리
+    const activeUploadIds = new Set();
+    let heartbeatInterval = null;
 
     // --- Load history from localStorage ---
     function loadHistory() {
@@ -38,17 +42,46 @@
       historyList.innerHTML = "";
       history.forEach(item => {
         const li = document.createElement("li");
-        li.textContent = `${item.filename} (${new Date(item.date).toLocaleString()})`;
+        const status = item.status || 'completed'; // 기존 데이터는 completed로 처리
+        const statusIcon = status === 'completed' ? '✅' : status === 'canceled' ? '❌' : '⏸️';
+        const statusText = status === 'completed' ? '' : ` (${status})`;
+        li.textContent = `${statusIcon} ${item.filename}${statusText} (${new Date(item.date).toLocaleString()})`;
         historyList.appendChild(li);
       });
     }
 
     // --- Save history entry ---
-    function saveHistory(filename) {
+    function saveHistory(filename, status = 'completed') {
       const history = JSON.parse(localStorage.getItem("drcv-history") || "[]");
-      history.push({ filename, date: new Date().toISOString() });
+      history.unshift({ filename, date: new Date().toISOString(), status }); // unshift로 맨 앞에 추가
       localStorage.setItem("drcv-history", JSON.stringify(history));
       loadHistory();
+    }
+
+    // 통합 heartbeat 함수
+    function startHeartbeat() {
+      if (heartbeatInterval) return; // 이미 실행 중
+      
+      heartbeatInterval = setInterval(async () => {
+        if (activeUploadIds.size === 0) {
+          // 활성 업로드가 없으면 heartbeat 중지
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+          return;
+        }
+        
+        try {
+          const response = await fetch('/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ upload_ids: Array.from(activeUploadIds) })
+          });
+          const result = await response.text();
+          console.log('Heartbeat result:', result);
+        } catch (e) {
+          console.log('Heartbeat failed:', e);
+        }
+      }, 30000); // 30초마다
     }
 
     loadHistory();
@@ -71,14 +104,46 @@
       const title = document.createElement("div");
       title.textContent = file.name;
       title.className = "mb-2 text-sm font-bold";
+      
+      let uploadId = null;
 
+      const progressWrapper = document.createElement("div");
+      progressWrapper.className = "mb-2";
+      
       const progress = document.createElement("progress");
       progress.max = 100;
       progress.value = 0;
       progress.className = "w-full h-3";
+      
+      const progressText = document.createElement("div");
+      progressText.textContent = "0%";
+      progressText.className = "text-xs text-gray-400 mt-1";
+      
+      progressWrapper.appendChild(progress);
+      progressWrapper.appendChild(progressText);
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.className = "px-3 py-1 bg-red-600 hover:bg-red-500 rounded text-xs font-bold text-white";
+      
+      let isCanceled = false;
+      cancelBtn.addEventListener('click', () => {
+        isCanceled = true;
+        wrapper.style.opacity = "0.5";
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = "Canceled";
+        cancelBtn.className = "px-3 py-1 bg-gray-500 rounded text-xs font-bold text-white cursor-not-allowed";
+        saveHistory(file.name, 'canceled');
+        
+        // 활성 업로드 목록에서 제거
+        if (uploadId) {
+          activeUploadIds.delete(parseInt(uploadId));
+        }
+      });
 
       wrapper.appendChild(title);
-      wrapper.appendChild(progress);
+      wrapper.appendChild(progressWrapper);
+      wrapper.appendChild(cancelBtn);
       progressContainer.appendChild(wrapper);
 
       // 1. Check resume status
@@ -89,6 +154,11 @@
 
       // 2. Upload remaining chunks
       for (let i = startChunk; i < totalChunks; i++) {
+        if (isCanceled) {
+          console.log(`Upload canceled for ${file.name}`);
+          return;
+        }
+
         const start = i * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const blob = file.slice(start, end);
@@ -99,13 +169,38 @@
         formData.append("chunk_index", i);
         formData.append("total_chunks", totalChunks);
 
-        await fetch("/upload", { method: "POST", body: formData });
+        const response = await fetch("/upload", { method: "POST", body: formData });
+        if (!response.ok) {
+          const errorText = await response.text();
+          alert(`❌ Upload failed: ${errorText}`);
+          return;
+        }
+        
+        // 첫 번째 chunk 업로드 후 uploadId 추출
+        if (i === startChunk && !uploadId) {
+          uploadId = await response.text();
+          console.log("Upload ID:", uploadId);
+          
+          // 활성 업로드 목록에 추가 및 heartbeat 시작
+          activeUploadIds.add(parseInt(uploadId));
+          startHeartbeat();
+        }
 
-        progress.value = ((i + 1) / totalChunks) * 100;
+        const progressPercent = (((i + 1) / totalChunks) * 100).toFixed(1);
+        progress.value = parseFloat(progressPercent);
+        progressText.textContent = `${progressPercent}%`;
       }
 
-      saveHistory(file.name);
-      alert(`✅ ${file.name} upload complete!`);
+      // 활성 업로드 목록에서 제거
+      if (uploadId) {
+        activeUploadIds.delete(parseInt(uploadId));
+      }
+      
+      if (!isCanceled) {
+        saveHistory(file.name);
+        // 완료된 업로드를 current uploads에서 제거
+        wrapper.remove();
+      }
     }
   </script>
 </body>

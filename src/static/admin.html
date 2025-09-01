@@ -45,7 +45,7 @@
       tbody.innerHTML = "";
       list.forEach(item => {
         tbody.innerHTML += `
-          <tr class="border-t border-gray-700">
+          <tr class="border-t border-gray-700" data-id="${item.id}">
             <td class="px-2 py-1">${item.id}</td>
             <td class="px-2 py-1">${item.filename}</td>
             <td class="px-2 py-1">${item.size}</td>
@@ -71,6 +71,53 @@
     document.getElementById("next").addEventListener("click", () => {
       page++; loadData();
     });
+
+    // SSE 연결로 실시간 업데이트
+    const eventSource = new EventSource('/events');
+    eventSource.addEventListener('updates', function(event) {
+      try {
+        const updates = JSON.parse(event.data);
+        updates.forEach(item => updateSingleRow(item));
+      } catch (e) {
+        console.error('Failed to parse update data:', e);
+      }
+    });
+    
+    eventSource.onmessage = function(event) {
+      if (event.data === 'heartbeat') {
+        // 연결 유지용 heartbeat
+      }
+    };
+    
+    function updateSingleRow(item) {
+      const tbody = document.getElementById("tbody");
+      let existingRow = tbody.querySelector(`tr[data-id="${item.id}"]`);
+      
+      const rowHTML = `
+        <tr class="border-t border-gray-700" data-id="${item.id}">
+          <td class="px-2 py-1">${item.id}</td>
+          <td class="px-2 py-1">${item.filename}</td>
+          <td class="px-2 py-1">${item.size}</td>
+          <td class="px-2 py-1">${item.status}</td>
+          <td class="px-2 py-1">${item.started_at}</td>
+          <td class="px-2 py-1">${item.updated_at}</td>
+          <td class="px-2 py-1">${item.completed_at || ""}</td>
+        </tr>
+      `;
+      
+      if (existingRow) {
+        // 기존 행 업데이트
+        existingRow.outerHTML = rowHTML;
+      } else {
+        // 새로운 행을 맨 위에 추가 (최신이 위로)
+        tbody.insertAdjacentHTML('afterbegin', rowHTML);
+      }
+    }
+
+    eventSource.onerror = function(event) {
+      console.log('SSE connection error:', event);
+      // 재연결은 브라우저가 자동으로 처리
+    };
 
     loadData();
   </script>

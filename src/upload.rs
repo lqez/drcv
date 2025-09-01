@@ -1,57 +1,177 @@
-use axum::{extract::{Multipart, State}, response::IntoResponse};
-use sqlx::SqlitePool;
-use std::{fs, path::PathBuf};
+use axum::{extract::{State, ConnectInfo, Query, Extension}, response::IntoResponse, http::{HeaderMap, StatusCode}, Json};
+use axum_typed_multipart::{TryFromMultipart, TypedMultipart, FieldData};
+use sqlx::{SqlitePool, Row};
+use std::{fs, path::PathBuf, net::SocketAddr, collections::HashMap};
 use tokio::io::AsyncWriteExt;
-use crate::db;
+use serde::Deserialize;
+use crate::{db, AppConfig};
+
+#[derive(Deserialize)]
+pub struct HeartbeatRequest {
+    pub upload_ids: Vec<i64>,
+}
+
+#[derive(TryFromMultipart)]
+pub struct ChunkUploadRequest {
+    pub filename: String,
+    pub chunk_index: u32,
+    pub total_chunks: u32,
+    pub chunk: FieldData<bytes::Bytes>,
+}
 
 pub async fn handle_chunk_upload(
     State(pool): State<SqlitePool>,
-    mut multipart: Multipart,
-) -> impl IntoResponse {
-    let save_dir = "./uploads";
-    fs::create_dir_all(save_dir).unwrap();
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(config): Extension<AppConfig>,
+    TypedMultipart(upload_data): TypedMultipart<ChunkUploadRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // 요청 처리 중 연결 끊어짐 감지를 위한 future 생성
+    let upload_future = process_chunk_upload(pool.clone(), addr, config, upload_data);
+    
+    // 연결 끊어짐이나 타임아웃 처리
+    match tokio::time::timeout(std::time::Duration::from_secs(300), upload_future).await {
+        Ok(result) => result,
+        Err(_) => {
+            // 타임아웃 발생 (클라이언트 연결 끊어짐 가능성)
+            println!("⚠️ Upload timeout - client may have disconnected");
+            Err((StatusCode::REQUEST_TIMEOUT, "Upload timeout".to_string()))
+        }
+    }
+}
 
-    let mut filename = String::new();
-    let mut chunk_index: usize = 0;
-    let mut total_chunks: usize = 0;
-    let mut data: Vec<u8> = Vec::new();
+async fn process_chunk_upload(
+    pool: SqlitePool,
+    addr: SocketAddr,
+    config: AppConfig,
+    upload_data: ChunkUploadRequest,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let save_dir = &config.upload_dir;
+    fs::create_dir_all(save_dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        match field.name() {
-            Some("filename") => {
-                filename = String::from_utf8(field.bytes().await.unwrap().to_vec()).unwrap();
+    let client_ip = addr.ip().to_string();
+    
+    // 기존 업로드 정보 확인 (db::init_upload 호출 전에)
+    let existing_upload = sqlx::query("SELECT id, size FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
+        .bind(&upload_data.filename)
+        .bind(&client_ip)
+        .fetch_optional(&pool).await
+        .expect("select failed");
+    
+    let id = db::init_upload(&pool, &upload_data.filename, &client_ip).await;
+    
+    // 총 파일 크기 계산 및 체크
+    let estimated_file_size = (upload_data.chunk.contents.len() as u64) * (upload_data.total_chunks as u64);
+    if estimated_file_size > config.max_file_size {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("File too large: {} bytes exceeds limit of {} bytes", estimated_file_size, config.max_file_size)));
+    }
+    
+    let tmp_path = PathBuf::from(save_dir).join(format!("{}.part", upload_data.filename));
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&tmp_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to open file: {}", e)))?;
+
+    // 업로드 세션의 첫 번째 청크인지 확인 (static으로 추적)
+    use std::sync::{Mutex, LazyLock};
+    use std::collections::HashSet;
+    static LOGGED_UPLOADS: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+    
+    {
+        let mut logged = LOGGED_UPLOADS.lock().unwrap();
+        if !logged.contains(&id) {
+            logged.insert(id);
+            
+            if let Some(row) = existing_upload {
+                let existing_size: i64 = row.get("size");
+                if existing_size > 0 {
+                    println!("🔄 Resuming upload: {} (from {} bytes, chunk {})", upload_data.filename, existing_size, upload_data.chunk_index);
+                } else {
+                    println!("▶️ Starting upload: {}", upload_data.filename);
+                }
+            } else {
+                println!("▶️ Starting upload: {}", upload_data.filename);
             }
-            Some("chunk_index") => {
-                chunk_index = String::from_utf8(field.bytes().await.unwrap().to_vec()).unwrap().parse().unwrap();
-            }
-            Some("total_chunks") => {
-                total_chunks = String::from_utf8(field.bytes().await.unwrap().to_vec()).unwrap().parse().unwrap();
-            }
-            Some("chunk") => {
-                data = field.bytes().await.unwrap().to_vec();
-            }
-            _ => {}
         }
     }
 
-    let id = db::init_upload(&pool, &filename).await;           // (1) init (중복 init 방지)
-    let tmp_path = PathBuf::from(save_dir).join(format!("{}.part", filename));
-    let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(&tmp_path).await.unwrap();
-
-    if chunk_index == 0 {
-        println!("▶️ Starting upload: {}", filename);
-    }
-    if !data.is_empty() {
-        file.write_all(&data).await.unwrap();
-        db::mark_uploading(&pool, id, data.len() as i64).await; // (2) uploading + size 누적
+    let chunk_data = &upload_data.chunk.contents;
+    if !chunk_data.is_empty() {
+        file.write_all(chunk_data)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write chunk: {}", e)))?;
+        db::mark_uploading(&pool, id, chunk_data.len() as i64).await;
     }
 
-    if chunk_index + 1 == total_chunks {
-        let final_path = PathBuf::from(save_dir).join(&filename);
-        tokio::fs::rename(&tmp_path, &final_path).await.unwrap();
+    if upload_data.chunk_index + 1 == upload_data.total_chunks {
+        let final_path = PathBuf::from(save_dir).join(&upload_data.filename);
+        tokio::fs::rename(&tmp_path, &final_path)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to finalize file: {}", e)))?;
         println!("✅ Completed upload: {:?}", final_path);
-        db::mark_complete(&pool, id).await;                     // (3) complete
+        db::mark_complete(&pool, id).await;
     }
 
-    "OK"
+    Ok(id.to_string())
+}
+
+pub async fn handle_upload_head(
+    State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let filename = params.get("filename").unwrap_or(&"".to_string()).clone();
+    let client_ip = addr.ip().to_string();
+    
+    // 같은 IP에서 진행 중인 업로드가 있는지 확인
+    if let Ok(Some(row)) = sqlx::query("SELECT size FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
+        .bind(&filename)
+        .bind(&client_ip)
+        .fetch_optional(&pool).await {
+        
+        let uploaded_bytes: i64 = row.try_get("size").unwrap_or(0);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-uploaded-bytes", uploaded_bytes.to_string().parse().unwrap());
+        return (headers, "").into_response();
+    }
+    
+    // 진행 중인 업로드가 없으면 0바이트
+    let mut headers = HeaderMap::new();
+    headers.insert("x-uploaded-bytes", "0".parse().unwrap());
+    (headers, "").into_response()
+}
+
+pub async fn handle_heartbeat(
+    State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<HeartbeatRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let client_ip = addr.ip().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    
+    let mut updated_count = 0;
+    
+    for upload_id in request.upload_ids {
+        // 각 ID의 업로드가 같은 IP에서 진행 중인지 확인하고 updated_at 갱신
+        match sqlx::query(
+            r#"UPDATE uploads 
+               SET updated_at = ?1 
+               WHERE id = ?2 AND client_ip = ?3 AND status = 'uploading'"#)
+            .bind(&now)
+            .bind(upload_id)
+            .bind(&client_ip)
+            .execute(&pool).await {
+            
+            Ok(result) => {
+                updated_count += result.rows_affected();
+            },
+            Err(e) => {
+                println!("Heartbeat error for upload {}: {}", upload_id, e);
+            }
+        }
+    }
+    
+    Ok(format!("heartbeat_ok:{}", updated_count))
 }
