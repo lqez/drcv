@@ -23,7 +23,18 @@ pub async fn init_pool() -> SqlitePool {
             updated_at   TEXT NOT NULL,
             completed_at TEXT
         )
-    "#).execute(&pool).await.expect("migrate failed");
+    "#).execute(&pool).await.expect("migrate uploads failed");
+
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS clients (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_ip    TEXT NOT NULL UNIQUE,
+            user_agent   TEXT,
+            first_seen   TEXT NOT NULL,
+            last_seen    TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'connected'  -- connected | disconnected
+        )
+    "#).execute(&pool).await.expect("migrate clients failed");
 
     pool
 }
@@ -72,6 +83,45 @@ pub async fn mark_complete(pool: &SqlitePool, id: i64) {
         .execute(pool).await.expect("update complete failed");
 }
 
+pub async fn update_client_heartbeat(pool: &SqlitePool, client_ip: &str, user_agent: Option<&str>) {
+    let now = chrono::Utc::now().to_rfc3339();
+    
+    // INSERT OR REPLACE를 사용하여 클라이언트 정보 업데이트
+    sqlx::query(
+        r#"INSERT INTO clients (client_ip, user_agent, first_seen, last_seen, status)
+           VALUES (?1, ?2, ?3, ?3, 'connected')
+           ON CONFLICT(client_ip) DO UPDATE SET
+           user_agent = COALESCE(?2, user_agent),
+           last_seen = ?3,
+           status = 'connected'"#)
+        .bind(client_ip)
+        .bind(user_agent)
+        .bind(&now)
+        .execute(pool).await.expect("update client heartbeat failed");
+}
+
+pub async fn get_connected_clients(pool: &SqlitePool) -> Vec<serde_json::Value> {
+    if let Ok(rows) = sqlx::query(
+        r#"SELECT client_ip, user_agent, first_seen, last_seen, status
+           FROM clients 
+           WHERE status = 'connected'
+           ORDER BY last_seen DESC"#)
+        .fetch_all(pool).await {
+        
+        rows.into_iter().map(|row| {
+            serde_json::json!({
+                "client_ip": row.get::<String, _>("client_ip"),
+                "user_agent": row.try_get::<String, _>("user_agent").ok(),
+                "first_seen": row.get::<String, _>("first_seen"),
+                "last_seen": row.get::<String, _>("last_seen"),
+                "status": row.get::<String, _>("status")
+            })
+        }).collect()
+    } else {
+        Vec::new()
+    }
+}
+
 pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_minutes: i64) {
     let cutoff_time = chrono::Utc::now() - chrono::Duration::minutes(timeout_minutes);
     let cutoff_str = cutoff_time.to_rfc3339();
@@ -97,4 +147,15 @@ pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_minutes:
         .bind(chrono::Utc::now().to_rfc3339())
         .bind(&cutoff_str)
         .execute(pool).await.expect("mark stale uploads failed");
+}
+
+pub async fn mark_stale_clients_disconnected(pool: &SqlitePool, timeout_minutes: i64) {
+    let cutoff_time = chrono::Utc::now() - chrono::Duration::minutes(timeout_minutes);
+    let cutoff_str = cutoff_time.to_rfc3339();
+    
+    sqlx::query(
+        r#"DELETE FROM clients
+           WHERE status = 'connected' AND last_seen < ?1"#)
+        .bind(&cutoff_str)
+        .execute(pool).await.expect("delete stale clients failed");
 }

@@ -119,12 +119,39 @@ async fn main() {
         .layer(Extension(config.clone()))
         .with_state(pool.clone());
 
+    // 터널 정보를 위한 공유 상태
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    #[derive(Clone)]
+    pub struct TunnelInfo {
+        pub subdomain: Option<String>,
+        pub external_ip: Option<String>,
+        pub expires_at: Option<std::time::SystemTime>,
+    }
+    let tunnel_info = Arc::new(RwLock::new(TunnelInfo {
+        subdomain: None,
+        external_ip: None,
+        expires_at: None,
+    }));
+
     // 관리자 서버 (8081)
     let admin_app = Router::new()
         .route("/", get(|| async {
             axum::response::Html(include_str!("static/admin.html"))
         }))
         .route("/data", get(admin::admin_data))
+        .route("/clients", get(admin::admin_clients))
+        .route("/tunnel", get({
+            let tunnel_info = tunnel_info.clone();
+            move |_: axum::extract::State<SqlitePool>| async move {
+                let info = tunnel_info.read().await;
+                axum::Json(serde_json::json!({
+                    "subdomain": info.subdomain,
+                    "external_ip": info.external_ip,
+                    "expires_at": info.expires_at.map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())
+                }))
+            }
+        }))
         .route("/events", get(admin::admin_events))
         .layer(Extension(config.clone()))
         .with_state(pool.clone());
@@ -155,6 +182,14 @@ async fn main() {
                 println!("🔗 Tunnel active: {}.drcv.app", subdomain);
                 tunnel_client.print_status();
                 
+                // 터널 정보 저장
+                {
+                    let mut info = tunnel_info.write().await;
+                    info.subdomain = Some(subdomain);
+                    info.external_ip = tunnel_client.get_external_ip();
+                    info.expires_at = Some(std::time::SystemTime::now() + std::time::Duration::from_secs(86400));
+                }
+                
                 // Keep-alive 시작
                 if let Err(e) = tunnel_client.start_keepalive().await {
                     println!("⚠️  Keepalive setup failed: {}", e);
@@ -167,13 +202,14 @@ async fn main() {
         }
     }
     
-    // 1분마다 오래된 업로드를 disconnected로 마크하는 백그라운드 작업
+    // 1분마다 오래된 업로드/클라이언트를 disconnected로 마크하는 백그라운드 작업
     let pool_clone = pool.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60)); // 1분
         loop {
             interval.tick().await;
             db::mark_stale_uploads_disconnected(&pool_clone, 1).await; // 1분 이상 업데이트 없으면 disconnected
+            db::mark_stale_clients_disconnected(&pool_clone, 2).await; // 2분 이상 heartbeat 없으면 disconnected
         }
     });
 

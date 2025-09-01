@@ -6,7 +6,37 @@
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 font-mono p-8">
-  <h1 class="text-2xl font-bold text-green-400 mb-6">Upload History</h1>
+  <h1 class="text-2xl font-bold text-green-400 mb-6">DRCV Admin</h1>
+
+  <!-- Tunnel Status -->
+  <div id="tunnelStatus" class="mb-6 p-4 bg-gray-800 border border-gray-700 rounded hidden">
+    <h2 class="text-lg font-bold text-blue-400 mb-2">🔗 Tunnel Status</h2>
+    <div id="tunnelInfo" class="text-sm"></div>
+  </div>
+
+  <!-- Connected Clients -->
+  <div class="mb-6">
+    <h2 class="text-lg font-bold text-yellow-400 mb-2">👥 Connected Clients</h2>
+    <div class="bg-gray-800 border border-gray-700 rounded">
+      <table class="table-auto w-full">
+        <thead>
+          <tr class="bg-gray-700 text-yellow-400">
+            <th class="px-2 py-1 text-left">IP Address</th>
+            <th class="px-2 py-1 text-left">User Agent</th>
+            <th class="px-2 py-1 text-left">First Seen</th>
+            <th class="px-2 py-1 text-left">Last Seen</th>
+          </tr>
+        </thead>
+        <tbody id="clientsTable">
+          <tr>
+            <td colspan="4" class="px-2 py-4 text-center text-gray-500">No clients connected</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h2 class="text-lg font-bold text-green-400 mb-4">📁 Upload History</h2>
 
   <form id="searchForm" class="flex mb-4">
     <input id="searchInput" type="text" placeholder="Search filename"
@@ -120,6 +150,77 @@
     };
 
     loadData();
+    loadClients();
+    loadTunnelStatus();
+
+    // 클라이언트 목록 로드
+    async function loadClients() {
+      try {
+        const resp = await fetch('/clients');
+        const clients = await resp.json();
+        const tbody = document.getElementById("clientsTable");
+        
+        if (clients.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="px-2 py-4 text-center text-gray-500">No clients connected</td></tr>';
+        } else {
+          tbody.innerHTML = clients.map(client => `
+            <tr class="border-t border-gray-700">
+              <td class="px-2 py-1">${client.client_ip}</td>
+              <td class="px-2 py-1">${client.user_agent || 'Unknown'}</td>
+              <td class="px-2 py-1">${formatDateTime(client.first_seen)}</td>
+              <td class="px-2 py-1">${formatDateTime(client.last_seen)}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error('Failed to load clients:', e);
+      }
+    }
+
+    // 터널 상태 로드
+    async function loadTunnelStatus() {
+      try {
+        const resp = await fetch('/tunnel');
+        const tunnel = await resp.json();
+        const tunnelStatus = document.getElementById("tunnelStatus");
+        const tunnelInfo = document.getElementById("tunnelInfo");
+        
+        if (tunnel.subdomain) {
+          tunnelStatus.classList.remove('hidden');
+          const expiresAt = tunnel.expires_at ? new Date(tunnel.expires_at * 1000) : null;
+          const timeRemaining = expiresAt ? Math.max(0, Math.floor((expiresAt - new Date()) / 1000 / 3600)) : 0;
+          
+          tunnelInfo.innerHTML = `
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <strong>URL:</strong> <a href="https://${tunnel.subdomain}.drcv.app" target="_blank" class="text-blue-300">https://${tunnel.subdomain}.drcv.app</a>
+              </div>
+              <div>
+                <strong>External IP:</strong> ${tunnel.external_ip || 'Unknown'}
+              </div>
+              <div>
+                <strong>Expires:</strong> ${timeRemaining}h remaining
+              </div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        console.error('Failed to load tunnel status:', e);
+      }
+    }
+
+    // 날짜/시간 포맷팅
+    function formatDateTime(isoString) {
+      if (!isoString) return '';
+      const date = new Date(isoString);
+      return date.toLocaleString();
+    }
+
+    // 5초마다 클라이언트 목록과 터널 상태 새로고침
+    setInterval(() => {
+      loadClients();
+      loadTunnelStatus();
+    }, 5000);
   </script>
 </body>
 </html>

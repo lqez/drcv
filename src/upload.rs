@@ -146,10 +146,18 @@ pub async fn handle_upload_head(
 pub async fn handle_heartbeat(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<HeartbeatRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let client_ip = addr.ip().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    
+    // User-Agent 헤더 추출
+    let user_agent = headers.get("user-agent")
+        .and_then(|v| v.to_str().ok());
+    
+    // 클라이언트 heartbeat 업데이트
+    db::update_client_heartbeat(&pool, &client_ip, user_agent).await;
     
     let mut updated_count = 0;
     

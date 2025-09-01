@@ -22,6 +22,7 @@ pub struct TunnelClient {
     tunnel_server: String,
     local_port: u16,
     subdomain: Option<String>,
+    external_ip: Option<String>,
     expires_at: Option<std::time::SystemTime>,
 }
 
@@ -33,6 +34,7 @@ impl TunnelClient {
             tunnel_server: api_server,
             local_port,
             subdomain: None,
+            external_ip: None,
             expires_at: None,
         }
     }
@@ -56,6 +58,7 @@ impl TunnelClient {
         
         // 성공 시 정보 저장
         self.subdomain = Some(subdomain.clone());
+        self.external_ip = Some(external_ip.clone());
         self.expires_at = Some(std::time::SystemTime::now() + Duration::from_secs(86400)); // 24시간
         
         println!("🌐 External IP detected by server: {}:{}", external_ip, self.local_port);
@@ -218,6 +221,10 @@ impl TunnelClient {
         } else {
             println!("  ❌ No active tunnel");
         }
+    }
+    
+    pub fn get_external_ip(&self) -> Option<String> {
+        self.external_ip.clone()
     }
     
     fn is_likely_behind_nat(&self, external_ip: &str) -> bool {

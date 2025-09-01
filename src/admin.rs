@@ -61,6 +61,13 @@ pub async fn admin_data(
     Json(out)
 }
 
+pub async fn admin_clients(
+    State(pool): State<SqlitePool>,
+) -> impl IntoResponse {
+    let clients = crate::db::get_connected_clients(&pool).await;
+    Json(clients)
+}
+
 pub async fn admin_events(
     State(pool): State<SqlitePool>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
