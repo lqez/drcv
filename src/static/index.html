@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>drcv upload (multi resumable)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-200 font-mono min-h-screen flex flex-col items-center py-10">
+  <h1 class="text-3xl font-bold text-green-400 mb-6">drcv uploader</h1>
+  
+  <div class="w-full max-w-xl bg-gray-800 p-6 rounded-lg shadow-lg">
+    <input id="files" type="file" multiple 
+      class="block w-full text-sm text-gray-300 file:mr-4 file:py-2 file:px-4
+             file:rounded-full file:border-0 file:text-sm file:font-semibold
+             file:bg-green-600 file:text-white hover:file:bg-green-500 mb-4"/>
+    <button id="uploadBtn" 
+      class="w-full py-2 px-4 bg-green-600 hover:bg-green-500 rounded font-bold text-gray-900 mb-4">
+      Upload
+    </button>
+
+    <h2 class="text-lg font-semibold mb-2">Current Uploads</h2>
+    <div id="progress-container" class="space-y-4"></div>
+
+    <h2 class="text-lg font-semibold mt-6 mb-2">Upload History</h2>
+    <ul id="history" class="text-sm space-y-1"></ul>
+  </div>
+
+  <script>
+    const CHUNK_SIZE = 1024 * 256; // 256KB
+    const fileInput = document.getElementById('files');
+    const btn = document.getElementById('uploadBtn');
+    const progressContainer = document.getElementById('progress-container');
+    const historyList = document.getElementById('history');
+
+    // --- Load history from localStorage ---
+    function loadHistory() {
+      const history = JSON.parse(localStorage.getItem("drcv-history") || "[]");
+      historyList.innerHTML = "";
+      history.forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = `${item.filename} (${new Date(item.date).toLocaleString()})`;
+        historyList.appendChild(li);
+      });
+    }
+
+    // --- Save history entry ---
+    function saveHistory(filename) {
+      const history = JSON.parse(localStorage.getItem("drcv-history") || "[]");
+      history.push({ filename, date: new Date().toISOString() });
+      localStorage.setItem("drcv-history", JSON.stringify(history));
+      loadHistory();
+    }
+
+    loadHistory();
+
+    btn.addEventListener('click', async () => {
+      const files = fileInput.files;
+      if (!files.length) return alert("Select files first");
+      progressContainer.innerHTML = "";
+
+      for (const file of files) {
+        await uploadFile(file);
+      }
+    });
+
+    async function uploadFile(file) {
+      // Create progress row
+      const wrapper = document.createElement("div");
+      wrapper.className = "bg-gray-700 p-3 rounded";
+
+      const title = document.createElement("div");
+      title.textContent = file.name;
+      title.className = "mb-2 text-sm font-bold";
+
+      const progress = document.createElement("progress");
+      progress.max = 100;
+      progress.value = 0;
+      progress.className = "w-full h-3";
+
+      wrapper.appendChild(title);
+      wrapper.appendChild(progress);
+      progressContainer.appendChild(wrapper);
+
+      // 1. Check resume status
+      const headResp = await fetch(`/upload?filename=${encodeURIComponent(file.name)}`, { method: "HEAD" });
+      let uploadedBytes = parseInt(headResp.headers.get("x-uploaded-bytes") || "0");
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      let startChunk = Math.floor(uploadedBytes / CHUNK_SIZE);
+
+      // 2. Upload remaining chunks
+      for (let i = startChunk; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const blob = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("chunk", blob);
+        formData.append("filename", file.name);
+        formData.append("chunk_index", i);
+        formData.append("total_chunks", totalChunks);
+
+        await fetch("/upload", { method: "POST", body: formData });
+
+        progress.value = ((i + 1) / totalChunks) * 100;
+      }
+
+      saveHistory(file.name);
+      alert(`✅ ${file.name} upload complete!`);
+    }
+  </script>
+</body>
+</html>

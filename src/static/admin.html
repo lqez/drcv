@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>drcv admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-200 font-mono p-8">
+  <h1 class="text-2xl font-bold text-green-400 mb-6">Upload History</h1>
+
+  <form id="searchForm" class="flex mb-4">
+    <input id="searchInput" type="text" placeholder="Search filename"
+      class="flex-grow p-2 rounded-l bg-gray-800 text-gray-200 border border-gray-700"/>
+    <button class="px-4 bg-green-600 rounded-r">Search</button>
+  </form>
+
+  <table class="table-auto w-full border border-gray-700">
+    <thead>
+      <tr class="bg-gray-800 text-green-400">
+        <th class="px-2 py-1">ID</th>
+        <th class="px-2 py-1">Filename</th>
+        <th class="px-2 py-1">Size</th>
+        <th class="px-2 py-1">Status</th>
+        <th class="px-2 py-1">Started</th>
+        <th class="px-2 py-1">Updated</th>
+        <th class="px-2 py-1">Completed</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div class="mt-4 flex justify-between">
+    <button id="prev" class="px-4 py-2 bg-gray-700 rounded">Prev</button>
+    <button id="next" class="px-4 py-2 bg-gray-700 rounded">Next</button>
+  </div>
+
+  <script>
+    let page = 1;
+    let query = "";
+
+    async function loadData() {
+      const resp = await fetch(`/data?page=${page}&q=${encodeURIComponent(query)}`);
+      const list = await resp.json();
+      const tbody = document.getElementById("tbody");
+      tbody.innerHTML = "";
+      list.forEach(item => {
+        tbody.innerHTML += `
+          <tr class="border-t border-gray-700">
+            <td class="px-2 py-1">${item.id}</td>
+            <td class="px-2 py-1">${item.filename}</td>
+            <td class="px-2 py-1">${item.size}</td>
+            <td class="px-2 py-1">${item.status}</td>
+            <td class="px-2 py-1">${item.started_at}</td>
+            <td class="px-2 py-1">${item.updated_at}</td>
+            <td class="px-2 py-1">${item.completed_at || ""}</td>
+          </tr>
+        `;
+      });
+    }
+
+    document.getElementById("searchForm").addEventListener("submit", e => {
+      e.preventDefault();
+      query = document.getElementById("searchInput").value;
+      page = 1;
+      loadData();
+    });
+
+    document.getElementById("prev").addEventListener("click", () => {
+      if (page > 1) { page--; loadData(); }
+    });
+    document.getElementById("next").addEventListener("click", () => {
+      page++; loadData();
+    });
+
+    loadData();
+  </script>
+</body>
+</html>
