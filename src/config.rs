@@ -9,7 +9,8 @@ pub struct AppConfig {
     pub upload_dir: String,
     pub upload_port: u16,
     pub admin_port: u16,
-    pub cf_domain: String,
+    pub tunnel_domain: String,
+    pub tunnel_provider: String,
     
     pub upload_timeout: Duration,
     pub cleanup_interval: Duration,
@@ -44,8 +45,16 @@ pub struct Args {
     pub upload_dir: String,
     
     #[arg(long, default_value = "drcv.app")]
-    #[arg(help = "Cloudflare Tunnel domain root (e.g., drcv.app)")]
-    pub cf_domain: String,
+    #[arg(help = "Tunnel domain root (e.g., drcv.app)")]
+    pub tunnel_domain: String,
+    
+    #[arg(long, default_value = "cloudflare")]
+    #[arg(help = "Tunnel provider (cloudflare)")]
+    pub tunnel_provider: String,
+    
+    #[arg(short, long)]
+    #[arg(help = "Show verbose configuration information")]
+    pub verbose: bool,
 }
 
 impl Args {
@@ -56,7 +65,8 @@ impl Args {
             upload_dir: self.upload_dir.clone(),
             upload_port: self.upload_port,
             admin_port: self.admin_port,
-            cf_domain: self.cf_domain.clone(),
+            tunnel_domain: self.tunnel_domain.clone(),
+            tunnel_provider: self.tunnel_provider.clone(),
             
             upload_timeout: Duration::from_secs(300),
             cleanup_interval: Duration::from_secs(10),
@@ -65,6 +75,15 @@ impl Args {
             shutdown_grace_period: Duration::from_secs(3),
             default_page_size: 100,
         }
+    }
+    
+    pub fn print_config_info(&self, config: &AppConfig) {
+        println!("Max file size: {} bytes ({})", config.max_file_size, self.max_file_size);
+        println!("Chunk size: {} bytes ({})", config.chunk_size, self.chunk_size);
+        println!("Upload directory: {}", config.upload_dir);
+        println!("Upload port: {}", config.upload_port);
+        println!("Admin port: {}", config.admin_port);
+        println!("▶️ drcv admin running on http://127.0.0.1:{} (localhost only)", config.admin_port);
     }
 }
 

@@ -1,134 +1,102 @@
 mod db;
 mod upload;
 mod admin;
-mod cf_tunnel;
+mod tunnels;
 mod utils;
 mod config;
+mod apps;
 
-use axum::{routing::{get, post, head}, Router, Extension};
 use sqlx::SqlitePool;
-use tokio::net::TcpListener;
-use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use clap::Parser;
 use config::Args;
-
-
+use tunnels::{TunnelConfig, create_tunnel_provider};
+use apps::{admin::TunnelInfo, upload::create_app as create_upload_app, admin::create_app as create_admin_app};
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-
-    if std::process::Command::new("cloudflared").arg("--version").output().is_err() {
-        eprintln!("❌ cloudflared not found in PATH.");
-        eprintln!("➡️  Please install and authenticate Cloudflare Tunnel, then re-run drcv.");
-        if cfg!(target_os = "macos") {
-            eprintln!("   • macOS: brew install cloudflared");
-        }
-        eprintln!("   • Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-and-setup/installation");
-        eprintln!("   • Login (once): cloudflared tunnel login");
-        std::process::exit(1);
-    }
     let config = args.to_config();
+    if args.verbose {
+        args.print_config_info(&config);
+    }
     
-    println!("Max file size: {} bytes ({})", config.max_file_size, args.max_file_size);
-    println!("Chunk size: {} bytes ({})", config.chunk_size, args.chunk_size);
-    println!("Upload directory: {}", config.upload_dir);
-    println!("Upload port: {}", config.upload_port);
-    println!("Admin port: {}", config.admin_port);
+    let pool = initialize_database().await;
+    let tunnel_info = Arc::new(RwLock::new(TunnelInfo { hostname: None }));  
+    let tunnel_runner = setup_tunnel(&pool, &config, &tunnel_info).await;
+    let shutdown_tx = start_background_tasks(&pool, &config, tunnel_runner);
+    let upload_task = create_upload_app(&pool, &config, &shutdown_tx).await;
+    let admin_task = create_admin_app(&pool, &config, &tunnel_info, &shutdown_tx).await;
     
-    let pool: SqlitePool = db::init_pool().await.unwrap_or_else(|e| {
+    println!("DRCV is ready");
+
+    let info = tunnel_info.read().await;
+    if let Some(hostname) = &info.hostname {
+        println!("  • Share: https://{}", hostname);
+    }
+    println!("  • Admin: http://127.0.0.1:{}", config.admin_port);
+    println!("  • Upload dir: {}", config.upload_dir);
+    
+    let _ = tokio::join!(upload_task, admin_task);
+}
+
+async fn initialize_database() -> SqlitePool {
+    db::init_pool().await.unwrap_or_else(|e| {
         eprintln!("Failed to initialize database: {}", e);
         std::process::exit(1);
-    });
+    })
+}
 
-    let upload_app = Router::new()
-        .route("/", get(|| async {
-            axum::response::Html(include_str!("static/index.html"))
-        }))
-        .route("/upload", post(upload::handle_chunk_upload))
-        .route("/upload", head(upload::handle_upload_head))
-        .route("/heartbeat", post(upload::handle_heartbeat))
-        .layer(axum::extract::DefaultBodyLimit::max({
-            let overhead: u64 = 1024 * 1024; // 1 MiB
-            let max = config.chunk_size.saturating_add(overhead);
-            max as usize
-        }))
-        .layer(Extension(config.clone()))
-        .with_state(pool.clone());
-
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-    #[derive(Clone)]
-    pub struct TunnelInfo {
-        pub hostname: Option<String>,
-    }
-    let tunnel_info = Arc::new(RwLock::new(TunnelInfo { hostname: None }));
-
-    let admin_app = Router::new()
-        .route("/", get(|| async {
-            axum::response::Html(include_str!("static/admin.html"))
-        }))
-        .route("/data", get(admin::admin_data))
-        .route("/clients", get(admin::admin_clients))
-        .route("/tunnel", get({
-            let tunnel_info = tunnel_info.clone();
-            move |_: axum::extract::State<SqlitePool>| async move {
-                let info = tunnel_info.read().await;
-                axum::Json(serde_json::json!({ "hostname": info.hostname }))
-            }
-        }))
-        .route("/events", get(admin::admin_events))
-        .layer(Extension(config.clone()))
-        .with_state(pool.clone());
-
-    let upload_listener = TcpListener::bind(format!("0.0.0.0:{}", config.upload_port)).await.unwrap();
-    let admin_listener  = TcpListener::bind(format!("127.0.0.1:{}", config.admin_port)).await.unwrap();
-    
-    let upload_app = upload_app.into_make_service_with_connect_info::<SocketAddr>();
-    let admin_app = admin_app.into_make_service();
-
-    println!("▶️ drcv admin running on http://127.0.0.1:{} (localhost only)", config.admin_port);
-
-    let tunnel_runner = {
-        let cfg = cf_tunnel::CfTunnelConfig { hostname_root: config.cf_domain.clone(), local_port: config.upload_port };
-        match cf_tunnel::CfTunnelManager::ensure(&pool, &cfg).await {
-            Ok(manager) => {
-                {
-                    let mut info = tunnel_info.write().await;
-                    info.hostname = Some(manager.hostname.clone());
-                }
-                println!("DRCV is ready");
-                println!("  • Share: https://{}", manager.hostname);
-                println!("  • Admin: http://127.0.0.1:{}", config.admin_port);
-                println!("  • Upload dir: {}", config.upload_dir);
-                match manager.run().await {
-                    Ok(runner) => Some(runner),
-                    Err(e) => { eprintln!("⚠️  Failed to run cloudflared: {}", e); None }
-                }
-            }
-            Err(e) => {
-                eprintln!("⚠️  Cloudflare Tunnel not started: {}", e);
-                eprintln!("💡 Ensure cloudflared is installed and logged in (cloudflared tunnel login)");
-                None
-            }
+async fn setup_tunnel(pool: &SqlitePool, config: &config::AppConfig, tunnel_info: &Arc<RwLock<TunnelInfo>>) -> Option<Box<dyn tunnels::TunnelRunner>> {
+    let provider = match create_tunnel_provider(&config.tunnel_provider) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("⚠️  Failed to create tunnel provider: {}", e);
+            eprintln!("💡 Available providers: cloudflare");
+            std::process::exit(1);
         }
     };
+    
+    let cfg = TunnelConfig { 
+        hostname_root: config.tunnel_domain.clone(), 
+        local_port: config.upload_port 
+    };
+    
+    match provider.ensure(pool, &cfg).await {
+        Ok(manager) => {
+            let hostname = manager.hostname().to_string();
+            {
+                let mut info = tunnel_info.write().await;
+                info.hostname = Some(hostname);
+            }
+            
+            match manager.run().await {
+                Ok(runner) => Some(runner),
+                Err(e) => { 
+                    eprintln!("⚠️  Failed to run tunnel: {}", e); 
+                    None 
+                }
+            }
+        }
+        Err(_) => None
+    }
+}
 
+fn start_background_tasks(pool: &SqlitePool, config: &config::AppConfig, tunnel_runner: Option<Box<dyn tunnels::TunnelRunner>>) -> tokio::sync::broadcast::Sender<()> {
     use tokio::sync::broadcast;
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
-    let mut shutdown_rx_upload = shutdown_tx.subscribe();
-    let mut shutdown_rx_admin = shutdown_tx.subscribe();
     let shutdown_tx_clone = shutdown_tx.clone();
-    let tunnel_runner_opt = tunnel_runner;
-    let config_clone = config.clone();
+    
+    let config_shutdown = config.shutdown_grace_period;
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
         println!("Shutting down…");
         use std::io::Write as _;
         let _ = std::io::stdout().flush();
-        if let Some(runner) = tunnel_runner_opt { let _ = runner.shutdown().await; }
+        if let Some(runner) = tunnel_runner { let _ = runner.shutdown().await; }
         let _ = shutdown_tx_clone.send(());
-        tokio::time::sleep(config_clone.shutdown_grace_period).await;
+        tokio::time::sleep(config_shutdown).await;
         println!("Shutting down. Bye!");
         std::process::exit(0);
     });
@@ -143,21 +111,8 @@ async fn main() {
             db::mark_stale_clients_disconnected(&pool_clone, config_clone.client_stale_timeout).await;
         }
     });
-
-    let upload_task = tokio::spawn(async move {
-        axum::serve(upload_listener, upload_app)
-            .with_graceful_shutdown(async move { let _ = shutdown_rx_upload.recv().await; })
-            .await
-            .unwrap();
-    });
-    let admin_task = tokio::spawn(async move {
-        axum::serve(admin_listener, admin_app)
-            .with_graceful_shutdown(async move { let _ = shutdown_rx_admin.recv().await; })
-            .await
-            .unwrap();
-    });
-
-    let _ = tokio::join!(upload_task, admin_task);
+    
+    shutdown_tx
 }
 
 async fn wait_for_shutdown_signal() {
