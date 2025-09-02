@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>drcv upload (multi resumable)</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 font-mono min-h-screen flex flex-col items-center py-10">
   <h1 class="text-3xl font-bold text-green-400 mb-6">drcv uploader</h1>
+  <p id="share-url" class="mb-4 text-sm text-gray-400"></p>
   
   <div class="w-full max-w-xl bg-gray-800 p-6 rounded-lg shadow-lg">
     <input id="files" type="file" multiple 
@@ -26,7 +28,15 @@
   </div>
 
   <script>
-    const CHUNK_SIZE = 1024 * 256; // 256KB
+    // Show the URL to share (useful when accessed via {hash}.drcv.app)
+    (function(){
+      const el = document.getElementById('share-url');
+      const host = window.location.host;
+      const proto = window.location.protocol;
+      el.textContent = `Share this URL: ${proto}//${host}`;
+    })();
+
+    const CHUNK_SIZE = (window.DRCV_CONFIG && window.DRCV_CONFIG.chunkSize) || (4 * 1024 * 1024); // default 4MB
     const fileInput = document.getElementById('files');
     const btn = document.getElementById('uploadBtn');
     const progressContainer = document.getElementById('progress-container');
@@ -62,7 +72,7 @@
     function startHeartbeat() {
       if (heartbeatInterval) return; // 이미 실행 중
       
-      heartbeatInterval = setInterval(async () => {
+      const beat = async () => {
         if (activeUploadIds.size === 0) {
           // 활성 업로드가 없으면 heartbeat 중지
           clearInterval(heartbeatInterval);
@@ -81,19 +91,31 @@
         } catch (e) {
           console.log('Heartbeat failed:', e);
         }
-      }, 30000); // 30초마다
+      };
+
+      // 즉시 한 번 보내고, 이후 주기적으로 보냄
+      beat();
+      heartbeatInterval = setInterval(beat, 10000); // 10초마다
     }
 
     loadHistory();
 
+    // Upload multiple files with limited concurrency
     btn.addEventListener('click', async () => {
-      const files = fileInput.files;
+      const files = Array.from(fileInput.files || []);
       if (!files.length) return alert("Select files first");
       progressContainer.innerHTML = "";
 
-      for (const file of files) {
-        await uploadFile(file);
-      }
+      const limit = 3; // parallel uploads for multiple files
+      let idx = 0;
+      const workers = Array.from({ length: Math.min(limit, files.length) }, async () => {
+        while (idx < files.length) {
+          const myIndex = idx++;
+          const f = files[myIndex];
+          await uploadFile(f);
+        }
+      });
+      await Promise.all(workers);
     });
 
     async function uploadFile(file) {
@@ -116,7 +138,7 @@
       progress.className = "w-full h-3";
       
       const progressText = document.createElement("div");
-      progressText.textContent = "0%";
+      progressText.textContent = "0% • 0 KB/s";
       progressText.className = "text-xs text-gray-400 mt-1";
       
       progressWrapper.appendChild(progress);
@@ -151,6 +173,7 @@
       let uploadedBytes = parseInt(headResp.headers.get("x-uploaded-bytes") || "0");
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       let startChunk = Math.floor(uploadedBytes / CHUNK_SIZE);
+      let emaBps = null; // exponential moving average of bytes/sec
 
       // 2. Upload remaining chunks
       for (let i = startChunk; i < totalChunks; i++) {
@@ -169,7 +192,9 @@
         formData.append("chunk_index", i);
         formData.append("total_chunks", totalChunks);
 
+        const tStart = performance.now();
         const response = await fetch("/upload", { method: "POST", body: formData });
+        const tEnd = performance.now();
         if (!response.ok) {
           const errorText = await response.text();
           alert(`❌ Upload failed: ${errorText}`);
@@ -186,9 +211,13 @@
           startHeartbeat();
         }
 
+        // Update progress percent and speed
+        const elapsedSec = Math.max((tEnd - tStart) / 1000, 0.001);
+        const instBps = blob.size / elapsedSec;
+        emaBps = emaBps == null ? instBps : (emaBps * 0.7 + instBps * 0.3);
         const progressPercent = (((i + 1) / totalChunks) * 100).toFixed(1);
         progress.value = parseFloat(progressPercent);
-        progressText.textContent = `${progressPercent}%`;
+        progressText.textContent = `${progressPercent}% • ${formatSpeed(emaBps)}`;
       }
 
       // 활성 업로드 목록에서 제거
@@ -201,6 +230,15 @@
         // 완료된 업로드를 current uploads에서 제거
         wrapper.remove();
       }
+    }
+
+    function formatSpeed(bps) {
+      if (!isFinite(bps) || bps <= 0) return '0 KB/s';
+      const KB = 1024;
+      const MB = KB * 1024;
+      if (bps >= MB) return `${(bps / MB).toFixed(1)} MB/s`;
+      if (bps >= KB) return `${(bps / KB).toFixed(1)} KB/s`;
+      return `${Math.max(1, Math.round(bps))} B/s`;
     }
   </script>
 </body>

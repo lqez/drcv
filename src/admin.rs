@@ -32,15 +32,15 @@ pub async fn admin_data(
 
     let rows = if q.is_empty() {
         sqlx::query(
-            r#"SELECT id, filename, size, status, started_at, updated_at, completed_at
-               FROM uploads ORDER BY id DESC LIMIT 100 OFFSET ?1"#)
+            r#"SELECT id, filename, size, status, client_ip, started_at, updated_at, completed_at
+               FROM uploads ORDER BY updated_at DESC LIMIT 100 OFFSET ?1"#)
             .bind(offset)
             .fetch_all(&pool).await.expect("select failed")
     } else {
         sqlx::query(
-            r#"SELECT id, filename, size, status, started_at, updated_at, completed_at
-               FROM uploads WHERE filename LIKE ?1
-               ORDER BY id DESC LIMIT 100 OFFSET ?2"#)
+            r#"SELECT id, filename, size, status, client_ip, started_at, updated_at, completed_at
+               FROM uploads WHERE filename LIKE ?1 OR client_ip LIKE ?1
+               ORDER BY updated_at DESC LIMIT 100 OFFSET ?2"#)
             .bind(format!("%{}%", q))
             .bind(offset)
             .fetch_all(&pool).await.expect("select failed")
@@ -52,6 +52,7 @@ pub async fn admin_data(
             "filename":     r.get::<String, _>("filename"),
             "size":         r.get::<i64, _>("size"),
             "status":       r.get::<String, _>("status"),
+            "client_ip":    r.get::<String, _>("client_ip"),
             "started_at":   r.get::<String, _>("started_at"),
             "updated_at":   r.get::<String, _>("updated_at"),
             "completed_at": r.try_get::<String, _>("completed_at").ok(),

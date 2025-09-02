@@ -9,8 +9,7 @@ A fast, secure, and resumable file upload server with tunneling capabilities for
 - 🔄 **Real-time Monitoring**: Live upload progress and admin dashboard
 - 🛡️ **Security**: IP-based isolation, heartbeat monitoring, automatic cleanup
 - 📱 **Multi-platform**: Works on macOS, Linux, and Windows
-- 🏠 **Local Network**: Automatic local IP detection for LAN access
-- 🔧 **UPnP**: Automatic port forwarding for NAT environments
+- 🔒 **Cloudflare Tunnel**: Automatic external access via `{hash}.drcv.app`
 
 ## Quick Start
 
@@ -29,15 +28,23 @@ open http://localhost:8080
 open http://localhost:8081
 ```
 
-### Tunnel Mode (External Access)
-```bash
-# Enable tunnel for external access
-cargo run -- --tunnel
+### External Access via Cloudflare Tunnel (Recommended)
 
-# The server will display something like:
-# 🎉 Tunnel established: https://abc123.drcv.app
-# 📁 Share this URL for others to upload files to your computer!
+Use Cloudflare Tunnel to expose your local uploader under `https://{hash}.drcv.app` without opening inbound ports.
+
+Quick outline:
+
+1) Run the uploader locally
+```bash
+cargo run -- --upload-port 8080 --upload-dir ./uploads
 ```
+
+2) Ensure Cloudflare Tunnel is installed and logged in on the receiver:
+   - Install: see Cloudflare docs
+   - One-time login: `cloudflared tunnel login`
+   DRCV will auto-create and run a named tunnel on startup.
+
+3) Share `https://{hash}.drcv.app` with senders. Files are saved to your local `--upload-dir`.
 
 ## Installation
 
@@ -59,11 +66,11 @@ Usage: drcv [OPTIONS]
 
 Options:
   --max-file-size <SIZE>      Maximum file size (e.g., 100GiB, 10TB, 500MB) [default: 100GiB]
+  --chunk-size <SIZE>         Upload chunk size (e.g., 4MiB, 1MiB, 512KB) [default: 4MiB]
   --upload-port <PORT>        Upload server port (use different ports if multiple instances behind NAT) [default: 8080]
   --admin-port <PORT>         Admin server port [default: 8081]
   --upload-dir <PATH>         Upload directory path [default: ./uploads]
-  --tunnel                    Enable tunnel mode to expose server via drcv.app subdomain
-  --tunnel-server <URL>       Tunnel server URL [default: https://api.drcv.app]
+  --cf-domain <DOMAIN>        Cloudflare Tunnel domain root [default: drcv.app]
   -h, --help                  Print help
 ```
 
@@ -75,30 +82,24 @@ Options:
 3. Heartbeat mechanism prevents stale connections
 4. Admin dashboard shows real-time progress
 
-### Tunnel Mode
-1. Client detects external IP and sets up UPnP port forwarding
-2. Registers with tunnel server to get unique subdomain (`{hash}.drcv.app`)
-3. DNS points directly to your external IP for P2P connection
-4. No proxy servers = faster uploads and lower costs
+### Cloudflare Tunnel Mode
+DRCV automatically creates and runs a Cloudflare Named Tunnel at startup (if `cloudflared` is installed and logged in). It generates or reuses a 6-char hash and exposes:
+
+1. Receiver runs DRCV locally
+2. DRCV spawns `cloudflared` to route `{hash}.drcv.app` to `localhost:8080`
+3. Sender opens `https://{hash}.drcv.app` and uploads
+4. Files are stored locally in the configured upload directory
 
 ## Network Access
 
-When you run DRCV, it will show all available access methods:
+On startup, DRCV prints a concise banner like:
 
 ```
-▶️ drcv uploader running on:
-   • http://0.0.0.0:8080 (all interfaces)
-   • http://192.168.1.100:8080 (local network)
-   • http://10.0.0.50:8080 (local network)
-
-▶️ drcv admin running on http://127.0.0.1:8081 (localhost only)
-
-🎉 Tunnel established: https://abc123.drcv.app
+DRCV is ready
+  • Share: https://abc123.drcv.app
+  • Admin: http://127.0.0.1:8081
+  • Upload dir: ./uploads
 ```
-
-- **Localhost**: `http://localhost:8080`
-- **Local Network**: `http://192.168.1.100:8080` (other devices on same WiFi/LAN)
-- **External**: `https://abc123.drcv.app` (tunnel mode only)
 
 ## Security
 
@@ -112,11 +113,9 @@ When you run DRCV, it will show all available access methods:
 ### Network Security
 - Admin dashboard (`8081`) only binds to `127.0.0.1`
 - Upload server (`8080`) binds to `0.0.0.0` but can be firewalled
-- Tunnel mode uses direct P2P connections (no proxy server)
+- External access is provided via Cloudflare Tunnel
 
-## Tunnel Server Setup
-
-DRCV includes a Cloudflare Workers-based tunnel server for external access. See [tunnel-server/README.md](tunnel-server/README.md) for detailed setup instructions.
+<!-- Tunnel server section removed: replaced by automatic Cloudflare Tunnel -->
 
 ## Contributing
 
@@ -125,4 +124,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, API documentation,
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-

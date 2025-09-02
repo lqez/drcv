@@ -1,7 +1,7 @@
 mod db;
 mod upload;
 mod admin;
-mod tunnel;
+mod cf_tunnel;
 
 use axum::{routing::{get, post, head}, Router, Extension};
 use sqlx::SqlitePool;
@@ -9,11 +9,11 @@ use tokio::net::TcpListener;
 use std::net::SocketAddr;
 use clap::Parser;
 use byte_unit::Byte;
-use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Clone)]
 pub struct AppConfig {
     pub max_file_size: u64,
+    pub chunk_size: u64,
     pub upload_dir: String,
 }
 
@@ -24,6 +24,10 @@ struct Args {
     #[arg(long, default_value = "100GiB")]
     #[arg(help = "Maximum file size (e.g., 100GiB, 10TB, 500MB)")]
     max_file_size: String,
+    
+    #[arg(long, default_value = "4MiB")]
+    #[arg(help = "Upload chunk size (e.g., 4MiB, 1MiB, 512KB)")]
+    chunk_size: String,
     
     #[arg(long, default_value = "8080")]
     #[arg(help = "Upload server port (use different ports if multiple instances behind NAT)")]
@@ -36,14 +40,9 @@ struct Args {
     #[arg(long, default_value = "./uploads")]
     #[arg(help = "Upload directory path")]
     upload_dir: String,
-    
-    #[arg(long)]
-    #[arg(help = "Enable tunnel mode to expose server via drcv.app subdomain")]
-    tunnel: bool,
-    
-    #[arg(long, default_value = "https://api.drcv.app")]
-    #[arg(help = "Tunnel server URL")]
-    tunnel_server: String,
+    #[arg(long, default_value = "drcv.app")]
+    #[arg(help = "Cloudflare Tunnel domain root (e.g., drcv.app)")]
+    cf_domain: String,
 }
 
 fn parse_file_size(size_str: &str) -> u64 {
@@ -55,53 +54,30 @@ fn parse_file_size(size_str: &str) -> u64 {
         })
 }
 
-fn get_local_ips() -> Vec<String> {
-    let mut local_ips = Vec::new();
-    
-    // 네트워크 인터페이스에서 로컬 IP 주소들 수집
-    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        for (_name, ip) in interfaces {
-            match ip {
-                IpAddr::V4(ipv4) => {
-                    // 루프백, 링크로컬, APIPA 주소 제외
-                    if !ipv4.is_loopback() && !ipv4.is_link_local() && !is_apipa(&ipv4) {
-                        local_ips.push(format!("{}", ipv4));
-                    }
-                }
-                _ => {} // IPv6는 일단 제외
-            }
-        }
-    }
-    
-    // 대안: 간단한 소켓 연결 시도로 로컬 IP 감지
-    if local_ips.is_empty() {
-        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            if socket.connect("8.8.8.8:80").is_ok() {
-                if let Ok(local_addr) = socket.local_addr() {
-                    local_ips.push(local_addr.ip().to_string());
-                }
-            }
-        }
-    }
-    
-    local_ips
-}
-
-fn is_apipa(ip: &Ipv4Addr) -> bool {
-    // APIPA range: 169.254.0.0/16
-    let octets = ip.octets();
-    octets[0] == 169 && octets[1] == 254
-}
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    // Preflight: require cloudflared to be installed
+    if std::process::Command::new("cloudflared").arg("--version").output().is_err() {
+        eprintln!("❌ cloudflared not found in PATH.");
+        eprintln!("➡️  Please install and authenticate Cloudflare Tunnel, then re-run drcv.");
+        if cfg!(target_os = "macos") {
+            eprintln!("   • macOS: brew install cloudflared");
+        }
+        eprintln!("   • Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-and-setup/installation");
+        eprintln!("   • Login (once): cloudflared tunnel login");
+        std::process::exit(1);
+    }
     let config = AppConfig {
         max_file_size: parse_file_size(&args.max_file_size),
+        chunk_size: parse_file_size(&args.chunk_size),
         upload_dir: args.upload_dir.clone(),
     };
     
     println!("Max file size: {} bytes ({})", config.max_file_size, args.max_file_size);
+    println!("Chunk size: {} bytes ({})", config.chunk_size, args.chunk_size);
     println!("Upload directory: {}", config.upload_dir);
     println!("Upload port: {}", args.upload_port);
     println!("Admin port: {}", args.admin_port);
@@ -116,6 +92,11 @@ async fn main() {
         .route("/upload", post(upload::handle_chunk_upload))
         .route("/upload", head(upload::handle_upload_head))
         .route("/heartbeat", post(upload::handle_heartbeat))
+        .layer(axum::extract::DefaultBodyLimit::max({
+            let overhead: u64 = 1024 * 1024; // 1 MiB
+            let max = config.chunk_size.saturating_add(overhead);
+            max as usize
+        }))
         .layer(Extension(config.clone()))
         .with_state(pool.clone());
 
@@ -124,15 +105,9 @@ async fn main() {
     use tokio::sync::RwLock;
     #[derive(Clone)]
     pub struct TunnelInfo {
-        pub subdomain: Option<String>,
-        pub external_ip: Option<String>,
-        pub expires_at: Option<std::time::SystemTime>,
+        pub hostname: Option<String>,
     }
-    let tunnel_info = Arc::new(RwLock::new(TunnelInfo {
-        subdomain: None,
-        external_ip: None,
-        expires_at: None,
-    }));
+    let tunnel_info = Arc::new(RwLock::new(TunnelInfo { hostname: None }));
 
     // 관리자 서버 (8081)
     let admin_app = Router::new()
@@ -145,11 +120,7 @@ async fn main() {
             let tunnel_info = tunnel_info.clone();
             move |_: axum::extract::State<SqlitePool>| async move {
                 let info = tunnel_info.read().await;
-                axum::Json(serde_json::json!({
-                    "subdomain": info.subdomain,
-                    "external_ip": info.external_ip,
-                    "expires_at": info.expires_at.map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())
-                }))
+                axum::Json(serde_json::json!({ "hostname": info.hostname }))
             }
         }))
         .route("/events", get(admin::admin_events))
@@ -163,44 +134,58 @@ async fn main() {
     let upload_app = upload_app.into_make_service_with_connect_info::<SocketAddr>();
     let admin_app = admin_app.into_make_service();
 
-    // 로컬 IP 주소들 감지
-    let local_ips = get_local_ips();
-    
-    println!("▶️ drcv uploader running on:");
-    println!("   • http://0.0.0.0:{} (all interfaces)", args.upload_port);
-    for ip in &local_ips {
-        println!("   • http://{}:{} (local network)", ip, args.upload_port);
-    }
-    
     println!("▶️ drcv admin running on http://127.0.0.1:{} (localhost only)", args.admin_port);
-    
-    // 터널 모드 활성화 시 터널 클라이언트 시작
-    if args.tunnel {
-        let mut tunnel_client = tunnel::TunnelClient::new(args.upload_port, args.tunnel_server.clone());
-        match tunnel_client.register().await {
-            Ok(subdomain) => {
-                println!("🔗 Tunnel active: {}.drcv.app", subdomain);
-                tunnel_client.print_status();
-                
-                // 터널 정보 저장
+
+    // Cloudflare Tunnel 자동 생성/실행
+    let tunnel_runner = {
+        let cfg = cf_tunnel::CfTunnelConfig { hostname_root: args.cf_domain.clone(), local_port: args.upload_port };
+        match cf_tunnel::CfTunnelManager::ensure(&pool, &cfg).await {
+            Ok(manager) => {
                 {
                     let mut info = tunnel_info.write().await;
-                    info.subdomain = Some(subdomain);
-                    info.external_ip = tunnel_client.get_external_ip();
-                    info.expires_at = Some(std::time::SystemTime::now() + std::time::Duration::from_secs(86400));
+                    info.hostname = Some(manager.hostname.clone());
                 }
-                
-                // Keep-alive 시작
-                if let Err(e) = tunnel_client.start_keepalive().await {
-                    println!("⚠️  Keepalive setup failed: {}", e);
+                println!("DRCV is ready");
+                println!("  • Share: https://{}", manager.hostname);
+                println!("  • Admin: http://127.0.0.1:{}", args.admin_port);
+                println!("  • Upload dir: {}", config.upload_dir);
+                match manager.run().await {
+                    Ok(runner) => Some(runner),
+                    Err(e) => { eprintln!("⚠️  Failed to run cloudflared: {}", e); None }
                 }
             }
             Err(e) => {
-                eprintln!("❌ Tunnel setup failed: {}", e);
-                eprintln!("💡 Continuing in local mode...");
+                eprintln!("⚠️  Cloudflare Tunnel not started: {}", e);
+                eprintln!("💡 Ensure cloudflared is installed and logged in (cloudflared tunnel login)");
+                None
             }
         }
-    }
+    };
+
+    // Graceful shutdown wiring for Axum servers and tunnel runner
+    use tokio::sync::broadcast;
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+    let mut shutdown_rx_upload = shutdown_tx.subscribe();
+    let mut shutdown_rx_admin = shutdown_tx.subscribe();
+    let shutdown_tx_clone = shutdown_tx.clone();
+    let tunnel_runner_opt = tunnel_runner;
+    tokio::spawn(async move {
+        // Wait for Ctrl-C or 'q'\n
+        wait_for_shutdown_signal().await;
+        // Print and flush shutdown message immediately before cleanup
+        println!("Shutting down…");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        // Stop cloudflared if running
+        if let Some(runner) = tunnel_runner_opt { let _ = runner.shutdown().await; }
+        // Notify servers to shutdown
+        let _ = shutdown_tx_clone.send(());
+        // Give servers time to drain persistent connections (e.g., SSE)
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        // Force exit if anything is still hanging
+        println!("Shutting down. Bye!");
+        std::process::exit(0);
+    });
     
     // 1분마다 오래된 업로드/클라이언트를 disconnected로 마크하는 백그라운드 작업
     let pool_clone = pool.clone();
@@ -214,11 +199,43 @@ async fn main() {
     });
 
     let upload_task = tokio::spawn(async move {
-        axum::serve(upload_listener, upload_app).await.unwrap();
+        axum::serve(upload_listener, upload_app)
+            .with_graceful_shutdown(async move { let _ = shutdown_rx_upload.recv().await; })
+            .await
+            .unwrap();
     });
     let admin_task = tokio::spawn(async move {
-        axum::serve(admin_listener, admin_app).await.unwrap();
+        axum::serve(admin_listener, admin_app)
+            .with_graceful_shutdown(async move { let _ = shutdown_rx_admin.recv().await; })
+            .await
+            .unwrap();
     });
 
     let _ = tokio::join!(upload_task, admin_task);
+}
+
+async fn wait_for_shutdown_signal() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::signal;
+
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+
+    let stdin_quit = async {
+        let mut reader = BufReader::new(tokio::io::stdin());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    if line.trim().eq_ignore_ascii_case("q") { break; }
+                }
+                Err(_e) => break,
+            }
+        }
+    };
+
+    tokio::select! { _ = ctrl_c => {}, _ = stdin_quit => {} }
 }

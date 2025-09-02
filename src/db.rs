@@ -25,6 +25,10 @@ pub async fn init_pool() -> SqlitePool {
         )
     "#).execute(&pool).await.expect("migrate uploads failed");
 
+    // Helpful indexes for admin queries
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_uploads_updated_at ON uploads(updated_at)")
+        .execute(&pool).await.expect("create idx updated_at failed");
+
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS clients (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +40,33 @@ pub async fn init_pool() -> SqlitePool {
         )
     "#).execute(&pool).await.expect("migrate clients failed");
 
+    // Simple key-value table for app settings (e.g., cf tunnel hash)
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS kv (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        )
+    "#).execute(&pool).await.expect("migrate kv failed");
+
     pool
+}
+
+pub async fn kv_get(pool: &SqlitePool, key: &str) -> Option<String> {
+    if let Ok(row) = sqlx::query("SELECT v FROM kv WHERE k = ?1")
+        .bind(key)
+        .fetch_optional(pool).await {
+        return row.and_then(|r| r.try_get::<String, _>("v").ok());
+    }
+    None
+}
+
+pub async fn kv_set(pool: &SqlitePool, key: &str, value: &str) {
+    let _ = sqlx::query(
+        r#"INSERT INTO kv(k, v) VALUES(?1, ?2)
+           ON CONFLICT(k) DO UPDATE SET v = excluded.v"#)
+        .bind(key)
+        .bind(value)
+        .execute(pool).await;
 }
 
 // init: 같은 IP에서 같은 파일명이 있고 완료되지 않았으면 그 id 사용, 없으면 생성
