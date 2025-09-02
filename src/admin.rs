@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use tokio_stream::StreamExt;
 use std::convert::Infallible;
+use log::error;
 use crate::config::AppConfig;
 
 #[derive(Deserialize)]
@@ -39,7 +40,7 @@ pub async fn admin_data(
             .bind(config.default_page_size)
             .bind(offset)
             .fetch_all(&pool).await.unwrap_or_else(|e| {
-                eprintln!("Database error in admin_data: {}", e);
+                error!("Database error in admin_data: {}", e);
                 Vec::new()
             })
     } else {
@@ -51,7 +52,7 @@ pub async fn admin_data(
             .bind(config.default_page_size)
             .bind(offset)
             .fetch_all(&pool).await.unwrap_or_else(|e| {
-                eprintln!("Database error in admin_data: {}", e);
+                error!("Database error in admin_data: {}", e);
                 Vec::new()
             })
     };

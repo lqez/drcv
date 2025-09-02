@@ -4,6 +4,7 @@ use sqlx::{SqlitePool, Row};
 use std::{fs, path::PathBuf, net::SocketAddr, collections::HashMap};
 use tokio::io::AsyncWriteExt;
 use serde::Deserialize;
+use log::{info, warn, debug};
 use crate::{db, config::AppConfig, utils};
 
 fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
@@ -69,7 +70,7 @@ pub async fn handle_chunk_upload(
     match tokio::time::timeout(upload_timeout, upload_future).await {
         Ok(result) => result,
         Err(_) => {
-            println!("⚠️ Upload timeout - client may have disconnected");
+            warn!("⚠️ Upload timeout - client may have disconnected");
             Err((StatusCode::REQUEST_TIMEOUT, "Upload timeout".to_string()))
         }
     }
@@ -118,12 +119,12 @@ async fn process_chunk_upload(
             if let Some(row) = existing_upload {
                 let existing_size: i64 = row.get("size");
                 if existing_size > 0 {
-                    println!("🔄 Resuming upload: {} (from {} bytes, chunk {})", upload_data.filename, existing_size, upload_data.chunk_index);
+                    info!("🔄 Resuming upload: {} (from {} bytes, chunk {})", upload_data.filename, existing_size, upload_data.chunk_index);
                 } else {
-                    println!("▶️ Starting upload: {}", upload_data.filename);
+                    info!("▶️ Starting upload: {}", upload_data.filename);
                 }
             } else {
-                println!("▶️ Starting upload: {}", upload_data.filename);
+                info!("▶️ Starting upload: {}", upload_data.filename);
             }
         }
     }
@@ -141,7 +142,7 @@ async fn process_chunk_upload(
         tokio::fs::rename(&tmp_path, &final_path)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to finalize file: {}", e)))?;
-        println!("✅ Completed upload: {:?}", final_path);
+        info!("✅ Completed upload: {:?}", final_path);
         db::mark_complete(&pool, id).await;
     }
 
@@ -205,7 +206,7 @@ pub async fn handle_heartbeat(
                 updated_count += result.rows_affected();
             },
             Err(e) => {
-                println!("Heartbeat error for upload {}: {}", upload_id, e);
+                debug!("Heartbeat error for upload {}: {}", upload_id, e);
             }
         }
     }

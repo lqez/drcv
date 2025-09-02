@@ -1,6 +1,7 @@
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use sqlx::Row;
 use std::str::FromStr;
+use log::{error, warn};
 use crate::utils;
 
 pub async fn init_pool() -> Result<SqlitePool, sqlx::Error> {
@@ -74,13 +75,13 @@ pub async fn init_upload(pool: &SqlitePool, filename: &str, client_ip: &str) -> 
         .fetch_optional(pool).await {
         Ok(Some(row)) => {
             return row.try_get::<i64, _>("id").unwrap_or_else(|e| {
-                eprintln!("Error getting upload id: {}", e);
+                error!("Error getting upload id: {}", e);
                 0
             });
         },
         Ok(None) => {},
         Err(e) => {
-            eprintln!("Database error in init_upload: {}", e);
+            error!("Database error in init_upload: {}", e);
             return 0;
         }
     }
@@ -95,7 +96,7 @@ pub async fn init_upload(pool: &SqlitePool, filename: &str, client_ip: &str) -> 
         .execute(pool).await {
         Ok(result) => result.last_insert_rowid(),
         Err(e) => {
-            eprintln!("Failed to insert upload: {}", e);
+            error!("Failed to insert upload: {}", e);
             0
         }
     }
@@ -111,7 +112,7 @@ pub async fn mark_uploading(pool: &SqlitePool, id: i64, delta_size: i64) {
         .bind(&now)
         .bind(id)
         .execute(pool).await.map_err(|e| {
-            eprintln!("Failed to update upload status: {}", e);
+            error!("Failed to update upload status: {}", e);
             e
         }).ok();
 }
@@ -125,7 +126,7 @@ pub async fn mark_complete(pool: &SqlitePool, id: i64) {
         .bind(&now)
         .bind(id)
         .execute(pool).await.map_err(|e| {
-            eprintln!("Failed to mark upload complete: {}", e);
+            error!("Failed to mark upload complete: {}", e);
             e
         }).ok();
 }
@@ -144,7 +145,7 @@ pub async fn update_client_heartbeat(pool: &SqlitePool, client_ip: &str, user_ag
         .bind(user_agent)
         .bind(&now)
         .execute(pool).await.map_err(|e| {
-            eprintln!("Failed to update client heartbeat: {}", e);
+            error!("Failed to update client heartbeat: {}", e);
             e
         }).ok();
 }
@@ -184,7 +185,7 @@ pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_seconds:
         for row in rows {
             let filename: String = row.get("filename");
             let client_ip: String = row.get("client_ip");
-            println!("❌ Upload disconnected (heartbeat timeout): {} from {}", filename, client_ip);
+            warn!("❌ Upload disconnected (heartbeat timeout): {} from {}", filename, client_ip);
         }
     }
     
@@ -195,7 +196,7 @@ pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_seconds:
         .bind(utils::now())
         .bind(&cutoff_str)
         .execute(pool).await.map_err(|e| {
-            eprintln!("Failed to mark stale uploads: {}", e);
+            error!("Failed to mark stale uploads: {}", e);
             e
         }).ok();
 }
@@ -209,7 +210,7 @@ pub async fn mark_stale_clients_disconnected(pool: &SqlitePool, timeout_seconds:
            WHERE status = 'connected' AND last_seen < ?1"#)
         .bind(&cutoff_str)
         .execute(pool).await.map_err(|e| {
-            eprintln!("Failed to delete stale clients: {}", e);
+            error!("Failed to delete stale clients: {}", e);
             e
         }).ok();
 }

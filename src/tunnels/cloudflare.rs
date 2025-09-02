@@ -6,6 +6,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use rand::{distributions::Alphanumeric, Rng};
 use sqlx::SqlitePool;
+use log::error;
 
 pub struct CloudflareTunnelProvider;
 
@@ -95,12 +96,12 @@ async fn check_cloudflared() -> Result<(), TunnelError> {
     match status {
         Ok(status) if status.success() => Ok(()),
         Ok(_) => {
-            eprintln!("❌ cloudflared installation corrupted.");
+            error!("❌ cloudflared installation corrupted.");
             print_cloudflared_install_guide();
             Err(TunnelError::NotInstalled("cloudflared --version failed".to_string()))
         },
         Err(_) => {
-            eprintln!("❌ cloudflared not found in PATH.");
+            error!("❌ cloudflared not found in PATH.");
             print_cloudflared_install_guide();
             Err(TunnelError::NotInstalled("cloudflared not found in PATH".to_string()))
         }
@@ -108,30 +109,30 @@ async fn check_cloudflared() -> Result<(), TunnelError> {
 }
 
 fn print_cloudflared_install_guide() {
-    eprintln!("➡️  Please install and authenticate Cloudflare Tunnel:");
-    eprintln!();
-    eprintln!("📦 Installation:");
+    error!("➡️  Please install and authenticate Cloudflare Tunnel:");
+    error!("");
+    error!("📦 Installation:");
     if cfg!(target_os = "macos") {
-        eprintln!("   brew install cloudflared");
+        error!("   brew install cloudflared");
     } else if cfg!(target_os = "linux") {
-        eprintln!("   # Debian/Ubuntu:");
-        eprintln!("   curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb");
-        eprintln!("   sudo dpkg -i cloudflared.deb");
-        eprintln!();
-        eprintln!("   # Other Linux:");
-        eprintln!("   curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64");
-        eprintln!("   chmod +x /usr/local/bin/cloudflared");
+        error!("   # Debian/Ubuntu:");
+        error!("   curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb");
+        error!("   sudo dpkg -i cloudflared.deb");
+        error!("");
+        error!("   # Other Linux:");
+        error!("   curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64");
+        error!("   chmod +x /usr/local/bin/cloudflared");
     } else if cfg!(target_os = "windows") {
-        eprintln!("   # Download from: https://github.com/cloudflare/cloudflared/releases/latest");
-        eprintln!("   # Or use Chocolatey: choco install cloudflared");
+        error!("   # Download from: https://github.com/cloudflare/cloudflared/releases/latest");
+        error!("   # Or use Chocolatey: choco install cloudflared");
     }
-    eprintln!();
-    eprintln!("🔑 Authentication (required once):");
-    eprintln!("   cloudflared tunnel login");
-    eprintln!();
-    eprintln!("📖 Documentation:");
-    eprintln!("   https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-and-setup/installation");
-    eprintln!();
+    error!("");
+    error!("🔑 Authentication (required once):");
+    error!("   cloudflared tunnel login");
+    error!("");
+    error!("📖 Documentation:");
+    error!("   https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-and-setup/installation");
+    error!("");
 }
 
 fn rand_hash(len: usize) -> String {
@@ -153,9 +154,9 @@ async fn create_tunnel(name: &str) -> Result<(), TunnelError> {
     if !out.status.success() {
         let stderr = utils::bytes_to_string(&out.stderr);
         if stderr.to_lowercase().contains("not authenticated") || stderr.to_lowercase().contains("login") {
-            eprintln!("❌ Cloudflare Tunnel not authenticated.");
-            eprintln!("🔑 Please run: cloudflared tunnel login");
-            eprintln!("📖 Follow the browser authentication flow, then re-run drcv.");
+            error!("❌ Cloudflare Tunnel not authenticated.");
+            error!("🔑 Please run: cloudflared tunnel login");
+            error!("📖 Follow the browser authentication flow, then re-run drcv.");
             return Err(TunnelError::AuthError("Not authenticated with Cloudflare".to_string()));
         }
         return Err(TunnelError::ConfigError(format!("create tunnel failed: {}", stderr)));
@@ -173,8 +174,8 @@ async fn get_tunnel_uuid(name: &str) -> Result<Option<String>, TunnelError> {
     if !out.status.success() {
         let stderr = utils::bytes_to_string(&out.stderr);
         if stderr.to_lowercase().contains("not authenticated") || stderr.to_lowercase().contains("login") {
-            eprintln!("❌ Cloudflare Tunnel not authenticated.");
-            eprintln!("🔑 Please run: cloudflared tunnel login");
+            error!("❌ Cloudflare Tunnel not authenticated.");
+            error!("🔑 Please run: cloudflared tunnel login");
             return Err(TunnelError::AuthError("Not authenticated with Cloudflare".to_string()));
         }
         return Err(TunnelError::ConfigError(format!("tunnel list failed: {}", stderr)));
@@ -214,8 +215,8 @@ async fn route_dns(name: &str, hostname: &str) -> Result<(), TunnelError> {
     if !out.status.success() {
         let err = utils::bytes_to_string(&out.stderr);
         if err.to_lowercase().contains("not authenticated") || err.to_lowercase().contains("login") {
-            eprintln!("❌ Cloudflare Tunnel not authenticated.");
-            eprintln!("🔑 Please run: cloudflared tunnel login");
+            error!("❌ Cloudflare Tunnel not authenticated.");
+            error!("🔑 Please run: cloudflared tunnel login");
             return Err(TunnelError::AuthError("Not authenticated with Cloudflare".to_string()));
         }
         if !err.to_lowercase().contains("already exists") {

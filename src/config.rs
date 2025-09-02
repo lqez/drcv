@@ -1,6 +1,7 @@
 use std::time::Duration;
 use clap::Parser;
 use byte_unit::Byte;
+use log::{info, error};
 
 #[derive(Clone)]
 pub struct AppConfig {
@@ -78,12 +79,12 @@ impl Args {
     }
     
     pub fn print_config_info(&self, config: &AppConfig) {
-        println!("Max file size: {} bytes ({})", config.max_file_size, self.max_file_size);
-        println!("Chunk size: {} bytes ({})", config.chunk_size, self.chunk_size);
-        println!("Upload directory: {}", config.upload_dir);
-        println!("Upload port: {}", config.upload_port);
-        println!("Admin port: {}", config.admin_port);
-        println!("▶️ drcv admin running on http://127.0.0.1:{} (localhost only)", config.admin_port);
+        info!("Max file size: {} bytes ({})", config.max_file_size, self.max_file_size);
+        info!("Chunk size: {} bytes ({})", config.chunk_size, self.chunk_size);
+        info!("Upload directory: {}", config.upload_dir);
+        info!("Upload port: {}", config.upload_port);
+        info!("Admin port: {}", config.admin_port);
+        info!("▶️ drcv admin running on http://127.0.0.1:{} (localhost only)", config.admin_port);
     }
 }
 
@@ -91,7 +92,7 @@ fn parse_file_size(size_str: &str) -> u64 {
     Byte::parse_str(size_str, true)
         .map(|b| b.as_u64())
         .unwrap_or_else(|_| {
-            eprintln!("Invalid file size format: {}", size_str);
+            error!("Invalid file size format: {}", size_str);
             std::process::exit(1);
         })
 }
