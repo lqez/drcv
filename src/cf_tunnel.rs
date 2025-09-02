@@ -2,7 +2,7 @@ use std::path::{PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 use rand::{distributions::Alphanumeric, Rng};
-use crate::db;
+use crate::{db, utils};
 use sqlx::SqlitePool;
 
 pub struct CfTunnelConfig {
@@ -111,7 +111,7 @@ async fn create_tunnel(name: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("failed to exec cloudflared tunnel create: {}", e))?;
     if !out.status.success() {
-        return Err(format!("create tunnel failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("create tunnel failed: {}", utils::bytes_to_string(&out.stderr)));
     }
     Ok(())
 }
@@ -124,9 +124,9 @@ async fn get_tunnel_uuid(name: &str) -> Result<Option<String>, String> {
         .await
         .map_err(|e| format!("failed to exec cloudflared tunnel list: {}", e))?;
     if !out.status.success() {
-        return Err(format!("tunnel list failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("tunnel list failed: {}", utils::bytes_to_string(&out.stderr)));
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = utils::bytes_to_string(&out.stdout);
     for line in stdout.lines() {
         // naive parse: expect the line containing the name also contains a UUID
         if line.contains(name) {
@@ -158,7 +158,7 @@ async fn route_dns(name: &str, hostname: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to exec cloudflared tunnel route dns: {}", e))?;
     if !out.status.success() {
         // If it already exists, proceed
-        let err = String::from_utf8_lossy(&out.stderr);
+        let err = utils::bytes_to_string(&out.stderr);
         if !err.to_lowercase().contains("already exists") {
             return Err(format!("route dns failed: {}", err));
         }

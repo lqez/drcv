@@ -4,7 +4,7 @@ use sqlx::{SqlitePool, Row};
 use std::{fs, path::PathBuf, net::SocketAddr, collections::HashMap};
 use tokio::io::AsyncWriteExt;
 use serde::Deserialize;
-use crate::{db, AppConfig};
+use crate::{db, config::AppConfig, utils};
 
 fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
     let peer_ip = addr.ip();
@@ -59,19 +59,16 @@ pub async fn handle_chunk_upload(
     headers: HeaderMap,
     TypedMultipart(upload_data): TypedMultipart<ChunkUploadRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // 즉시 클라이언트 heartbeat 업데이트(표시에 지연 없도록)
     let client_ip = extract_client_ip(&headers, &addr);
     let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok());
     db::update_client_heartbeat(&pool, &client_ip, user_agent).await;
-    // 요청 처리 중 연결 끊어짐 감지를 위한 future 생성
     let client_ip_clone = client_ip.clone();
+    let upload_timeout = config.upload_timeout;
     let upload_future = process_chunk_upload(pool.clone(), config, upload_data, client_ip_clone);
     
-    // 연결 끊어짐이나 타임아웃 처리
-    match tokio::time::timeout(std::time::Duration::from_secs(300), upload_future).await {
+    match tokio::time::timeout(upload_timeout, upload_future).await {
         Ok(result) => result,
         Err(_) => {
-            // 타임아웃 발생 (클라이언트 연결 끊어짐 가능성)
             println!("⚠️ Upload timeout - client may have disconnected");
             Err((StatusCode::REQUEST_TIMEOUT, "Upload timeout".to_string()))
         }
@@ -88,7 +85,6 @@ async fn process_chunk_upload(
     fs::create_dir_all(save_dir)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
 
-    // 기존 업로드 정보 확인 (db::init_upload 호출 전에)
     let existing_upload = sqlx::query("SELECT id, size FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
         .bind(&upload_data.filename)
         .bind(&client_ip)
@@ -97,7 +93,6 @@ async fn process_chunk_upload(
     
     let id = db::init_upload(&pool, &upload_data.filename, &client_ip).await;
     
-    // 총 파일 크기 계산 및 체크
     let estimated_file_size = (upload_data.chunk.contents.len() as u64) * (upload_data.total_chunks as u64);
     if estimated_file_size > config.max_file_size {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("File too large: {} bytes exceeds limit of {} bytes", estimated_file_size, config.max_file_size)));
@@ -111,7 +106,6 @@ async fn process_chunk_upload(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to open file: {}", e)))?;
 
-    // 업로드 세션의 첫 번째 청크인지 확인 (static으로 추적)
     use std::sync::Mutex;
     use std::collections::HashSet;
     static LOGGED_UPLOADS: once_cell::sync::Lazy<Mutex<HashSet<i64>>> = once_cell::sync::Lazy::new(|| Mutex::new(HashSet::new()));
@@ -163,10 +157,8 @@ pub async fn handle_upload_head(
     let filename = params.get("filename").unwrap_or(&"".to_string()).clone();
     let client_ip = extract_client_ip(&headers, &addr);
     let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok());
-    // 업로드 초기 HEAD 시점에도 즉시 클라이언트 표시
     db::update_client_heartbeat(&pool, &client_ip, user_agent).await;
     
-    // 같은 IP에서 진행 중인 업로드가 있는지 확인
     if let Ok(Some(row)) = sqlx::query("SELECT size FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
         .bind(&filename)
         .bind(&client_ip)
@@ -178,7 +170,6 @@ pub async fn handle_upload_head(
         return (headers, "").into_response();
     }
     
-    // 진행 중인 업로드가 없으면 0바이트
     let mut headers = HeaderMap::new();
     headers.insert("x-uploaded-bytes", "0".parse().unwrap());
     (headers, "").into_response()
@@ -191,19 +182,16 @@ pub async fn handle_heartbeat(
     Json(request): Json<HeartbeatRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let client_ip = extract_client_ip(&headers, &addr);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = utils::now();
     
-    // User-Agent 헤더 추출
     let user_agent = headers.get("user-agent")
         .and_then(|v| v.to_str().ok());
     
-    // 클라이언트 heartbeat 업데이트
     db::update_client_heartbeat(&pool, &client_ip, user_agent).await;
     
     let mut updated_count = 0;
     
     for upload_id in request.upload_ids {
-        // 각 ID의 업로드가 같은 IP에서 진행 중인지 확인하고 updated_at 갱신
         match sqlx::query(
             r#"UPDATE uploads 
                SET updated_at = ?1 

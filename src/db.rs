@@ -1,16 +1,16 @@
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use sqlx::Row;
 use std::str::FromStr;
+use crate::utils;
 
-pub async fn init_pool() -> SqlitePool {
+pub async fn init_pool() -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::from_str("sqlite:drcv.db")
                 .unwrap()
                 .create_if_missing(true)
-        ).await
-        .expect("sqlite open failed");
+        ).await?;
 
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS uploads (
@@ -23,11 +23,10 @@ pub async fn init_pool() -> SqlitePool {
             updated_at   TEXT NOT NULL,
             completed_at TEXT
         )
-    "#).execute(&pool).await.expect("migrate uploads failed");
+    "#).execute(&pool).await?;
 
-    // Helpful indexes for admin queries
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_uploads_updated_at ON uploads(updated_at)")
-        .execute(&pool).await.expect("create idx updated_at failed");
+        .execute(&pool).await?;
 
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS clients (
@@ -38,17 +37,16 @@ pub async fn init_pool() -> SqlitePool {
             last_seen    TEXT NOT NULL,
             status       TEXT NOT NULL DEFAULT 'connected'  -- connected | disconnected
         )
-    "#).execute(&pool).await.expect("migrate clients failed");
+    "#).execute(&pool).await?;
 
-    // Simple key-value table for app settings (e.g., cf tunnel hash)
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS kv (
             k TEXT PRIMARY KEY,
             v TEXT NOT NULL
         )
-    "#).execute(&pool).await.expect("migrate kv failed");
+    "#).execute(&pool).await?;
 
-    pool
+    Ok(pool)
 }
 
 pub async fn kv_get(pool: &SqlitePool, key: &str) -> Option<String> {
@@ -69,29 +67,42 @@ pub async fn kv_set(pool: &SqlitePool, key: &str, value: &str) {
         .execute(pool).await;
 }
 
-// init: 같은 IP에서 같은 파일명이 있고 완료되지 않았으면 그 id 사용, 없으면 생성
 pub async fn init_upload(pool: &SqlitePool, filename: &str, client_ip: &str) -> i64 {
-    if let Some(row) = sqlx::query("SELECT id FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
+    match sqlx::query("SELECT id FROM uploads WHERE filename = ?1 AND client_ip = ?2 AND status != 'complete'")
         .bind(filename)
         .bind(client_ip)
-        .fetch_optional(pool).await.expect("select failed") {
-        return row.try_get::<i64, _>("id").expect("id");
+        .fetch_optional(pool).await {
+        Ok(Some(row)) => {
+            return row.try_get::<i64, _>("id").unwrap_or_else(|e| {
+                eprintln!("Error getting upload id: {}", e);
+                0
+            });
+        },
+        Ok(None) => {},
+        Err(e) => {
+            eprintln!("Database error in init_upload: {}", e);
+            return 0;
+        }
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let result = sqlx::query(
+    let now = utils::now();
+    match sqlx::query(
         r#"INSERT INTO uploads(filename,size,status,client_ip,started_at,updated_at)
            VALUES(?1, 0, 'init', ?2, ?3, ?3)"#)
         .bind(filename)
         .bind(client_ip)
         .bind(&now)
-        .execute(pool).await.expect("insert init failed");
-
-    result.last_insert_rowid()
+        .execute(pool).await {
+        Ok(result) => result.last_insert_rowid(),
+        Err(e) => {
+            eprintln!("Failed to insert upload: {}", e);
+            0
+        }
+    }
 }
 
 pub async fn mark_uploading(pool: &SqlitePool, id: i64, delta_size: i64) {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = utils::now();
     sqlx::query(
         r#"UPDATE uploads
            SET size = size + ?1, status = 'uploading', updated_at = ?2
@@ -99,24 +110,29 @@ pub async fn mark_uploading(pool: &SqlitePool, id: i64, delta_size: i64) {
         .bind(delta_size)
         .bind(&now)
         .bind(id)
-        .execute(pool).await.expect("update uploading failed");
+        .execute(pool).await.map_err(|e| {
+            eprintln!("Failed to update upload status: {}", e);
+            e
+        }).ok();
 }
 
 pub async fn mark_complete(pool: &SqlitePool, id: i64) {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = utils::now();
     sqlx::query(
         r#"UPDATE uploads
            SET status = 'complete', updated_at = ?1, completed_at = ?1
            WHERE id = ?2"#)
         .bind(&now)
         .bind(id)
-        .execute(pool).await.expect("update complete failed");
+        .execute(pool).await.map_err(|e| {
+            eprintln!("Failed to mark upload complete: {}", e);
+            e
+        }).ok();
 }
 
 pub async fn update_client_heartbeat(pool: &SqlitePool, client_ip: &str, user_agent: Option<&str>) {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = utils::now();
     
-    // INSERT OR REPLACE를 사용하여 클라이언트 정보 업데이트
     sqlx::query(
         r#"INSERT INTO clients (client_ip, user_agent, first_seen, last_seen, status)
            VALUES (?1, ?2, ?3, ?3, 'connected')
@@ -127,7 +143,10 @@ pub async fn update_client_heartbeat(pool: &SqlitePool, client_ip: &str, user_ag
         .bind(client_ip)
         .bind(user_agent)
         .bind(&now)
-        .execute(pool).await.expect("update client heartbeat failed");
+        .execute(pool).await.map_err(|e| {
+            eprintln!("Failed to update client heartbeat: {}", e);
+            e
+        }).ok();
 }
 
 pub async fn get_connected_clients(pool: &SqlitePool) -> Vec<serde_json::Value> {
@@ -152,11 +171,10 @@ pub async fn get_connected_clients(pool: &SqlitePool) -> Vec<serde_json::Value> 
     }
 }
 
-pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_minutes: i64) {
-    let cutoff_time = chrono::Utc::now() - chrono::Duration::minutes(timeout_minutes);
+pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_seconds: i64) {
+    let cutoff_time = chrono::Utc::now() - chrono::Duration::seconds(timeout_seconds);
     let cutoff_str = cutoff_time.to_rfc3339();
     
-    // 먼저 disconnected로 마크될 업로드들을 조회
     if let Ok(rows) = sqlx::query(
         r#"SELECT filename, client_ip FROM uploads 
            WHERE status = 'uploading' AND updated_at < ?1"#)
@@ -174,18 +192,24 @@ pub async fn mark_stale_uploads_disconnected(pool: &SqlitePool, timeout_minutes:
         r#"UPDATE uploads
            SET status = 'disconnected', updated_at = ?1
            WHERE status = 'uploading' AND updated_at < ?2"#)
-        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(utils::now())
         .bind(&cutoff_str)
-        .execute(pool).await.expect("mark stale uploads failed");
+        .execute(pool).await.map_err(|e| {
+            eprintln!("Failed to mark stale uploads: {}", e);
+            e
+        }).ok();
 }
 
-pub async fn mark_stale_clients_disconnected(pool: &SqlitePool, timeout_minutes: i64) {
-    let cutoff_time = chrono::Utc::now() - chrono::Duration::minutes(timeout_minutes);
+pub async fn mark_stale_clients_disconnected(pool: &SqlitePool, timeout_seconds: i64) {
+    let cutoff_time = chrono::Utc::now() - chrono::Duration::seconds(timeout_seconds);
     let cutoff_str = cutoff_time.to_rfc3339();
     
     sqlx::query(
         r#"DELETE FROM clients
            WHERE status = 'connected' AND last_seen < ?1"#)
         .bind(&cutoff_str)
-        .execute(pool).await.expect("delete stale clients failed");
+        .execute(pool).await.map_err(|e| {
+            eprintln!("Failed to delete stale clients: {}", e);
+            e
+        }).ok();
 }

@@ -1,8 +1,9 @@
-use axum::{extract::{Query, State}, response::{IntoResponse, Sse, sse::Event}, Json};
+use axum::{extract::{Query, State, Extension}, response::{IntoResponse, Sse, sse::Event}, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use tokio_stream::StreamExt;
 use std::convert::Infallible;
+use crate::config::AppConfig;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -24,26 +25,35 @@ pub struct UploadData {
 
 pub async fn admin_data(
     State(pool): State<SqlitePool>,
+    Extension(config): Extension<AppConfig>,
     Query(params): Query<ListQuery>,
 ) -> impl IntoResponse {
     let page = params.page.unwrap_or(1).max(1);
-    let offset: i64 = ((page - 1) * 100) as i64;
+    let offset: i64 = ((page - 1) * config.default_page_size as usize) as i64;
     let q = params.q.unwrap_or_default();
 
     let rows = if q.is_empty() {
         sqlx::query(
             r#"SELECT id, filename, size, status, client_ip, started_at, updated_at, completed_at
-               FROM uploads ORDER BY updated_at DESC LIMIT 100 OFFSET ?1"#)
+               FROM uploads ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2"#)
+            .bind(config.default_page_size)
             .bind(offset)
-            .fetch_all(&pool).await.expect("select failed")
+            .fetch_all(&pool).await.unwrap_or_else(|e| {
+                eprintln!("Database error in admin_data: {}", e);
+                Vec::new()
+            })
     } else {
         sqlx::query(
             r#"SELECT id, filename, size, status, client_ip, started_at, updated_at, completed_at
                FROM uploads WHERE filename LIKE ?1 OR client_ip LIKE ?1
-               ORDER BY updated_at DESC LIMIT 100 OFFSET ?2"#)
+               ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3"#)
             .bind(format!("%{}%", q))
+            .bind(config.default_page_size)
             .bind(offset)
-            .fetch_all(&pool).await.expect("select failed")
+            .fetch_all(&pool).await.unwrap_or_else(|e| {
+                eprintln!("Database error in admin_data: {}", e);
+                Vec::new()
+            })
     };
 
     let out: Vec<serde_json::Value> = rows.into_iter().map(|r| {
