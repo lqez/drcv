@@ -9,6 +9,7 @@ repository = "https://github.com/lqez/drcv"
 readme = "README.md"
 keywords = ["rust"]
 categories = ["command-line-utilities"]
+exclude = ["website/", "docs/", "*.md", "!README.md"]
 
 [dependencies]
 axum = { version = "0.7", features = ["multipart"] }

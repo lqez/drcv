@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DRCV - Direct and Resumable Connection Vault</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="nav">
+                <div class="logo">
+                    <h1>DRCV</h1>
+                    <span class="tagline">Direct and Resumable Connection Vault</span>
+                </div>
+                <nav class="nav-links">
+                    <a href="#features">Features</a>
+                    <a href="#quickstart">Quick Start</a>
+                    <a href="#docs">Docs</a>
+                    <a href="https://github.com/lqez/drcv" target="_blank">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <h2>Fast, Secure Resumable File Uploads</h2>
+            <p>A Rust-powered file upload server with Cloudflare Tunnel integration for instant external access</p>
+            <div class="hero-buttons">
+                <a href="#quickstart" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/lqez/drcv" class="btn btn-secondary" target="_blank">View on GitHub</a>
+            </div>
+            <div class="demo-url">
+                <code>https://abc123.drcv.app</code>
+                <span>← Your instant shareable upload URL</span>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="features">
+        <div class="container">
+            <h2>Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3>Resumable Uploads</h3>
+                    <p>Chunk-based uploads with automatic resume on connection loss. Never lose progress again.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌐</div>
+                    <h3>Cloudflare Tunnel</h3>
+                    <p>Zero-config external access via secure Cloudflare tunnels. No port forwarding needed.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Real-time Dashboard</h3>
+                    <p>Live upload progress monitoring with Server-Sent Events for instant updates.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🛡️</div>
+                    <h3>Security First</h3>
+                    <p>IP-based isolation, heartbeat monitoring, and automatic cleanup of stale connections.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📱</div>
+                    <h3>Cross-platform</h3>
+                    <p>Native support for macOS, Linux, and Windows with consistent performance.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Fast & Lightweight</h3>
+                    <p>Built with Rust for maximum performance and minimal resource usage.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="quickstart" class="quickstart">
+        <div class="container">
+            <h2>Quick Start</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Install Dependencies</h3>
+                        <pre><code># macOS
+brew install cloudflared
+
+# Authenticate with Cloudflare
+cloudflared tunnel login</code></pre>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Run DRCV</h3>
+                        <pre><code># From source
+git clone https://github.com/lqez/drcv.git
+cd drcv
+cargo run
+
+# With custom settings
+cargo run -- --upload-port 9000 --max-file-size 10GiB</code></pre>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Share & Upload</h3>
+                        <div class="output-example">
+                            <div class="output-line">DRCV is ready</div>
+                            <div class="output-line">• Share: <span class="highlight">https://abc123.drcv.app</span></div>
+                            <div class="output-line">• Admin: http://127.0.0.1:8081</div>
+                            <div class="output-line">• Upload dir: ./uploads</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="docs" class="docs">
+        <div class="container">
+            <h2>Documentation</h2>
+            <div class="doc-grid">
+                <div class="doc-card">
+                    <h3>📚 Getting Started</h3>
+                    <p>Complete installation guide and basic usage examples</p>
+                    <a href="https://github.com/lqez/drcv#quick-start">Read Guide →</a>
+                </div>
+                <div class="doc-card">
+                    <h3>⚙️ Configuration</h3>
+                    <p>CLI options, environment variables, and advanced settings</p>
+                    <a href="https://github.com/lqez/drcv#command-line-options">View Options →</a>
+                </div>
+                <div class="doc-card">
+                    <h3>🔧 Contributing</h3>
+                    <p>Development setup, API reference, and contribution guidelines</p>
+                    <a href="https://github.com/lqez/drcv/blob/main/CONTRIBUTING.md">Contribute →</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-left">
+                    <h3>DRCV</h3>
+                    <p>Direct and Resumable Connection Vault</p>
+                </div>
+                <div class="footer-right">
+                    <a href="https://github.com/lqez/drcv">GitHub</a>
+                    <a href="https://github.com/lqez/drcv/releases">Releases</a>
+                    <a href="https://github.com/lqez/drcv/issues">Issues</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Park Hyunwoo. MIT License.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
