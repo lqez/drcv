@@ -11,10 +11,22 @@
   <p id="share-url" class="mb-4 text-sm text-gray-400"></p>
   
   <div class="w-full max-w-xl bg-gray-800 p-6 rounded-lg shadow-lg">
-    <input id="files" type="file" multiple 
-      class="block w-full text-sm text-gray-300 file:mr-4 file:py-2 file:px-4
-             file:rounded-full file:border-0 file:text-sm file:font-semibold
-             file:bg-green-600 file:text-white hover:file:bg-green-500 mb-4"/>
+    <div id="dropzone" class="border-2 border-dashed border-gray-600 rounded-lg p-8 text-center mb-4 transition-all duration-200 hover:border-green-500 cursor-pointer">
+      <div class="mb-4">
+        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </div>
+      <div class="text-sm text-gray-300 mb-2">
+        <span class="font-semibold text-green-400">Click to browse</span> or drag and drop files here
+      </div>
+      <div class="text-xs text-gray-500">
+        Multiple files supported
+      </div>
+    </div>
+    
+    <input id="files" type="file" multiple class="hidden"/>
+    
     <button id="uploadBtn" 
       class="w-full py-2 px-4 bg-green-600 hover:bg-green-500 rounded font-bold text-gray-900 mb-4">
       Upload
@@ -38,6 +50,7 @@
 
     const CHUNK_SIZE = (window.DRCV_CONFIG && window.DRCV_CONFIG.chunkSize) || (4 * 1024 * 1024); // default 4MB
     const fileInput = document.getElementById('files');
+    const dropzone = document.getElementById('dropzone');
     const btn = document.getElementById('uploadBtn');
     const progressContainer = document.getElementById('progress-container');
     const historyList = document.getElementById('history');
@@ -100,11 +113,95 @@
 
     loadHistory();
 
+    // --- Drag & Drop functionality ---
+    // Click to browse
+    dropzone.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    // File input change handler
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        updateDropzoneState(e.target.files.length);
+      }
+    });
+
+    // Drag & Drop event handlers
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, preventDefaults, false);
+      document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, unhighlight, false);
+    });
+
+    dropzone.addEventListener('drop', handleDrop, false);
+
+    function preventDefaults(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    function highlight(e) {
+      dropzone.classList.remove('border-gray-600', 'hover:border-green-500');
+      dropzone.classList.add('border-green-500', 'bg-green-900', 'bg-opacity-20');
+    }
+
+    function unhighlight(e) {
+      dropzone.classList.remove('border-green-500', 'bg-green-900', 'bg-opacity-20');
+      dropzone.classList.add('border-gray-600', 'hover:border-green-500');
+    }
+
+    function handleDrop(e) {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      
+      fileInput.files = files;
+      updateDropzoneState(files.length);
+    }
+
+    function updateDropzoneState(fileCount) {
+      const textDiv = dropzone.querySelector('.text-sm');
+      const subtextDiv = dropzone.querySelector('.text-xs');
+      
+      if (fileCount > 0) {
+        const files = Array.from(fileInput.files);
+        const fileNames = files.map(f => f.name);
+        
+        textDiv.innerHTML = `<span class="font-semibold text-green-400">${fileCount} file${fileCount > 1 ? 's' : ''} selected</span> • Click to change`;
+        
+        if (fileNames.length <= 5) {
+          subtextDiv.innerHTML = fileNames.map(name => `<div class="text-left">${name}</div>`).join('');
+        } else {
+          const firstFive = fileNames.slice(0, 5);
+          subtextDiv.innerHTML = firstFive.map(name => `<div class="text-left">${name}</div>`).join('') + 
+                                `<div class="text-left text-gray-400">... and ${fileNames.length - 5} more</div>`;
+        }
+        
+        dropzone.classList.add('border-green-500');
+        dropzone.classList.remove('border-gray-600');
+      } else {
+        textDiv.innerHTML = '<span class="font-semibold text-green-400">Click to browse</span> or drag and drop files here';
+        subtextDiv.innerHTML = 'Multiple files supported';
+        dropzone.classList.remove('border-green-500');
+        dropzone.classList.add('border-gray-600');
+      }
+    }
+
     // Upload multiple files with limited concurrency
     btn.addEventListener('click', async () => {
       const files = Array.from(fileInput.files || []);
       if (!files.length) return alert("Select files first");
       progressContainer.innerHTML = "";
+
+      // Reset dropzone after starting upload
+      fileInput.value = '';
+      updateDropzoneState(0);
 
       const limit = 3; // parallel uploads for multiple files
       let idx = 0;

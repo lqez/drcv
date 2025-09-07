@@ -1,6 +1,27 @@
 # Changelog
 
-## v0.2.0 (Current)
+## v0.2.1 (Current)
+
+### UI/UX Improvements
+- **Enhanced Upload Interface**: Replaced basic file input with modern drag-and-drop zone
+  - Visual drop zone with upload icon and clear instructions
+  - Drag-and-drop support with visual feedback (hover effects, color changes)
+  - Click-to-browse functionality maintained for traditional file selection
+  - Real-time file list preview showing selected file names (up to 5 files, with "... and X more" for larger selections)
+  - Automatic dropzone reset after upload starts for immediate reuse
+
+### Project Documentation
+- **Website Creation**: Added complete project website in `website/` directory
+  - Modern, responsive design with Inter font and clean aesthetics
+  - Feature showcase with 6 key capability cards
+  - Screenshot gallery section for visual interface preview
+  - Step-by-step quick start guide with code examples
+  - GitHub integration with links to documentation and releases
+  - Mobile-optimized responsive layout
+- **Package Configuration**: Updated Cargo.toml to exclude website files from cargo publish
+- **MIT License**: Added standard MIT license file for open source distribution
+
+## v0.2.0
 
 ### Major Improvements
 - **Modular Architecture**: Refactored codebase into clean module structure
