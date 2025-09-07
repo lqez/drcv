@@ -235,10 +235,6 @@ body {
     transition: transform 0.2s;
 }
 
-.screenshot-item:hover img {
-    transform: scale(1.02);
-}
-
 .screenshot-caption h3 {
     font-size: 1.25rem;
     font-weight: 600;
@@ -272,13 +268,17 @@ body {
 }
 
 .step {
-    display: flex;
-    align-items: flex-start;
-    gap: 2rem;
     background: white;
     padding: 2rem;
     border-radius: 0.75rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.step-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
 }
 
 .step-number {
@@ -295,10 +295,10 @@ body {
     font-size: 1.25rem;
 }
 
-.step-content h3 {
+.step-header h3 {
     font-size: 1.5rem;
     font-weight: 600;
-    margin-bottom: 1rem;
+    margin: 0;
     color: #1e293b;
 }
 
@@ -466,14 +466,10 @@ body {
         min-width: 0;
     }
     
-    .step {
-        flex-direction: column;
-        text-align: center;
-    }
-    
     .nav {
         flex-direction: column;
         gap: 1rem;
+        align-items: flex-start;
     }
     
     .nav-links {

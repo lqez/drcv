@@ -1,6 +1,6 @@
 # DRCV - Direct and Resumable Connection Vault
 
-A fast, secure resumable file upload server with Cloudflare Tunnel integration for easy external access.
+A fast, secure resumable file receiver with Cloudflare Tunnel integration for easy external access.
 
 ## Features
 
@@ -19,16 +19,16 @@ A fast, secure resumable file upload server with Cloudflare Tunnel integration f
 # Linux: see https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-and-setup/installation/
 cloudflared tunnel login
 
-# 2. Run DRCV (auto-creates tunnel)
-cargo run
+# 2. Run DRCV 
+drcv
 
 # Custom settings
-cargo run -- --upload-port 9000 --max-file-size 10GiB --upload-dir ./my-uploads
+drcv --upload-port 9000 --max-file-size 10GiB --upload-dir ./my-uploads
 
 # With verbose logging
-cargo run -- --verbose
+drcv --verbose
 # or
-RUST_LOG=debug cargo run
+RUST_LOG=debug drcv
 
 # 3. DRCV will show:
 # DRCV is ready
@@ -38,9 +38,16 @@ RUST_LOG=debug cargo run
 ```
 
 Share the `https://{hash}.drcv.app` URL for external uploads.
+
 Access: http://localhost:8080 (upload) | http://localhost:8081 (admin)
 
 ## Installation
+
+### From Crates.io (Recommended)
+```bash
+cargo install drcv
+drcv --help
+```
 
 ### From Source
 ```bash

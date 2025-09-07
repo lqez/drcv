@@ -22,7 +22,6 @@
                     <a href="#screenshots">Screenshots</a>
                     <a href="#quickstart">Quick Start</a>
                     <a href="#docs">Docs</a>
-                    <a href="https://github.com/lqez/drcv" target="_blank">GitHub</a>
                 </nav>
             </div>
         </div>
@@ -37,7 +36,7 @@
                 <a href="https://github.com/lqez/drcv" class="btn btn-secondary" target="_blank">View on GitHub</a>
             </div>
             <div class="demo-url">
-                <code>https://abc123.drcv.app</code>
+                <code>https://{hash}.drcv.app</code>
                 <span>← Your instant shareable upload URL</span>
             </div>
         </div>
@@ -81,37 +80,20 @@
         </div>
     </section>
 
-    <section id="screenshots" class="screenshots">
-        <div class="container">
-            <h2>Screenshots</h2>
-            <div class="screenshot-grid">
-                <div class="screenshot-item">
-                    <img src="drcv-uploader.png" alt="DRCV Upload Interface" loading="lazy">
-                    <div class="screenshot-caption">
-                        <h3>Upload Interface</h3>
-                        <p>Drag-and-drop file uploads with real-time progress tracking and resumable chunks</p>
-                    </div>
-                </div>
-                <div class="screenshot-item">
-                    <img src="drcv-admin.png" alt="DRCV Admin Dashboard" loading="lazy">
-                    <div class="screenshot-caption">
-                        <h3>Admin Dashboard</h3>
-                        <p>Live monitoring with upload history, client connections, and tunnel status</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <section id="quickstart" class="quickstart">
         <div class="container">
             <h2>Quick Start</h2>
             <div class="steps">
                 <div class="step">
-                    <div class="step-number">1</div>
+                    <div class="step-header">
+                        <div class="step-number">1</div>
+                        <h3>Install DRCV & Dependencies</h3>
+                    </div>
                     <div class="step-content">
-                        <h3>Install Dependencies</h3>
-                        <pre><code># macOS
+                        <pre><code># Install DRCV from crates.io
+cargo install drcv
+
+# Install cloudflared (macOS)
 brew install cloudflared
 
 # Authenticate with Cloudflare
@@ -119,22 +101,28 @@ cloudflared tunnel login</code></pre>
                     </div>
                 </div>
                 <div class="step">
-                    <div class="step-number">2</div>
-                    <div class="step-content">
+                    <div class="step-header">
+                        <div class="step-number">2</div>
                         <h3>Run DRCV</h3>
-                        <pre><code># From source
-git clone https://github.com/lqez/drcv.git
-cd drcv
-cargo run
+                    </div>
+                    <div class="step-content">
+                        <pre><code># Basic usage
+drcv
 
 # With custom settings
-cargo run -- --upload-port 9000 --max-file-size 10GiB</code></pre>
+drcv --upload-port 9000 --max-file-size 10GiB
+
+# From source (alternative)
+git clone https://github.com/lqez/drcv.git
+cd drcv && cargo run</code></pre>
                     </div>
                 </div>
                 <div class="step">
-                    <div class="step-number">3</div>
-                    <div class="step-content">
+                    <div class="step-header">
+                        <div class="step-number">3</div>
                         <h3>Share & Upload</h3>
+                    </div>
+                    <div class="step-content">
                         <div class="output-example">
                             <div class="output-line">DRCV is ready</div>
                             <div class="output-line">• Share: <span class="highlight">https://abc123.drcv.app</span></div>
@@ -184,7 +172,7 @@ cargo run -- --upload-port 9000 --max-file-size 10GiB</code></pre>
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2024 Park Hyunwoo. MIT License.</p>
+                <p>&copy; 2025 Park Hyunwoo. MIT License.</p>
             </div>
         </div>
     </footer>
