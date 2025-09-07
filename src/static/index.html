@@ -11,6 +11,8 @@
   <p id="share-url" class="mb-4 text-sm text-gray-400"></p>
   
   <div class="w-full max-w-xl bg-gray-800 p-6 rounded-lg shadow-lg">
+    <div id="connection-status" class="text-sm text-gray-400 mb-2"></div>
+    
     <div id="dropzone" class="border-2 border-dashed border-gray-600 rounded-lg p-8 text-center mb-4 transition-all duration-200 hover:border-green-500 cursor-pointer">
       <div class="mb-4">
         <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
@@ -48,6 +50,7 @@
       el.textContent = `Share this URL: ${proto}//${host}`;
     })();
 
+    console.log('DRCV script starting...');
     const CHUNK_SIZE = (window.DRCV_CONFIG && window.DRCV_CONFIG.chunkSize) || (4 * 1024 * 1024); // default 4MB
     const fileInput = document.getElementById('files');
     const dropzone = document.getElementById('dropzone');
@@ -112,6 +115,270 @@
     }
 
     loadHistory();
+
+    // --- WebRTC P2P functionality ---
+    let webrtcConnection = null;
+    let webrtcDataChannel = null;
+    let webrtcSessionId = null;
+    let webrtcWebSocket = null;
+    let connectionStatus = 'disconnected'; // 'connecting', 'p2p', 'http'
+
+    async function initWebRTC() {
+      try {
+        connectionStatus = 'connecting';
+        updateConnectionStatus();
+
+        // Connect to signaling server
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/signaling`;
+        webrtcWebSocket = new WebSocket(wsUrl);
+
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('WebRTC connection timeout'));
+          }, 10000); // 10 second timeout
+
+          webrtcWebSocket.onopen = () => {
+            console.log('Signaling WebSocket connected');
+            // Request new session
+            const message = { type: 'create_session' };
+            console.log('Sending message:', message);
+            webrtcWebSocket.send(JSON.stringify(message));
+          };
+
+          webrtcWebSocket.onmessage = async (event) => {
+            try {
+              const message = JSON.parse(event.data);
+              console.log('Signaling message:', message);
+
+              switch (message.type) {
+                case 'session_created':
+                  console.log('Session created:', message.session_id);
+                  webrtcSessionId = message.session_id;
+                  await setupPeerConnection();
+                  clearTimeout(timeout);
+                  resolve();
+                  break;
+                case 'offer':
+                  console.log('Received offer for session:', message.offer.session_id);
+                  webrtcSessionId = message.offer.session_id;
+                  await setupPeerConnection();
+                  await handleOffer(message.offer);
+                  clearTimeout(timeout);
+                  resolve();
+                  break;
+                case 'ice_candidate':
+                  console.log('Received ICE candidate from server:', message.candidate.candidate);
+                  if (webrtcConnection) {
+                    try {
+                      await webrtcConnection.addIceCandidate({
+                        candidate: message.candidate.candidate,
+                        sdpMid: message.candidate.sdp_mid,
+                        sdpMLineIndex: message.candidate.sdp_mline_index
+                      });
+                      console.log('Added ICE candidate successfully');
+                    } catch (error) {
+                      console.error('Error adding ICE candidate:', error);
+                    }
+                  }
+                  break;
+                case 'error':
+                  console.error('Signaling error:', message.message);
+                  clearTimeout(timeout);
+                  reject(new Error(message.message));
+                  break;
+                default:
+                  console.warn('Unknown message type:', message.type);
+              }
+            } catch (error) {
+              console.error('Error processing signaling message:', error);
+              clearTimeout(timeout);
+              reject(error);
+            }
+          };
+
+          webrtcWebSocket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            clearTimeout(timeout);
+            reject(error);
+          };
+
+          webrtcWebSocket.onclose = () => {
+            console.log('Signaling WebSocket closed');
+            // If WebRTC connection is not established yet, fallback to HTTP
+            setTimeout(() => {
+              if (connectionStatus === 'connecting' && 
+                  (!webrtcConnection || webrtcConnection.connectionState !== 'connected')) {
+                console.log('📶 WebSocket closed, falling back to HTTP');
+                connectionStatus = 'http';
+                updateConnectionStatus();
+                if (webrtcConnection) {
+                  webrtcConnection.close();
+                  webrtcConnection = null;
+                }
+              }
+            }, 1000); // 1 second delay
+          };
+        });
+      } catch (error) {
+        console.error('WebRTC initialization failed:', error);
+        throw error;
+      }
+    }
+
+    async function setupPeerConnection() {
+      webrtcConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+
+      // Handle ICE candidates
+      webrtcConnection.onicecandidate = (event) => {
+        if (event.candidate && webrtcWebSocket?.readyState === WebSocket.OPEN) {
+          console.log('Sending ICE candidate:', event.candidate.candidate);
+          webrtcWebSocket.send(JSON.stringify({
+            type: 'ice_candidate',
+            candidate: {
+              candidate: event.candidate.candidate,
+              sdp_mid: event.candidate.sdpMid,
+              sdp_mline_index: event.candidate.sdpMLineIndex,
+              session_id: webrtcSessionId
+            }
+          }));
+        } else if (!event.candidate) {
+          console.log('ICE gathering completed');
+        }
+      };
+
+      // Handle connection state changes
+      webrtcConnection.onconnectionstatechange = () => {
+        console.log('WebRTC connection state:', webrtcConnection.connectionState);
+        if (webrtcConnection.connectionState === 'connected') {
+          connectionStatus = 'p2p';
+          updateConnectionStatus();
+          console.log('🎉 WebRTC P2P connection established!');
+        } else if (webrtcConnection.connectionState === 'failed' || 
+                   webrtcConnection.connectionState === 'disconnected') {
+          console.log('⚠️ WebRTC connection failed, falling back to HTTP');
+          connectionStatus = 'http';
+          updateConnectionStatus();
+        }
+      };
+      
+      // Set up connection timeout fallback
+      setTimeout(() => {
+        console.log('Timeout check - connection state:', webrtcConnection?.connectionState);
+        if (webrtcConnection && 
+            (webrtcConnection.connectionState === 'connecting' || 
+             webrtcConnection.connectionState === 'new' ||
+             webrtcConnection.iceConnectionState === 'checking' ||
+             webrtcConnection.iceConnectionState === 'new')) {
+          console.log('⏱️ WebRTC connection timeout, falling back to HTTP');
+          connectionStatus = 'http';
+          updateConnectionStatus();
+          if (webrtcConnection) {
+            webrtcConnection.close();
+            webrtcConnection = null;
+          }
+        }
+      }, 10000); // 10 second timeout
+      
+      // Handle ICE connection state changes
+      webrtcConnection.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', webrtcConnection.iceConnectionState);
+        if (webrtcConnection.iceConnectionState === 'failed' || 
+            webrtcConnection.iceConnectionState === 'disconnected') {
+          console.log('⚠️ ICE connection failed/disconnected, falling back to HTTP');
+          connectionStatus = 'http';
+          updateConnectionStatus();
+          if (webrtcConnection) {
+            webrtcConnection.close();
+            webrtcConnection = null;
+          }
+        } else if (webrtcConnection.iceConnectionState === 'connected') {
+          console.log('🎉 ICE connection established!');
+          connectionStatus = 'p2p';
+          updateConnectionStatus();
+        }
+      };
+
+      // Handle incoming data channels
+      webrtcConnection.ondatachannel = (event) => {
+        webrtcDataChannel = event.channel;
+        console.log('Received data channel:', webrtcDataChannel.label);
+        
+        webrtcDataChannel.onopen = () => {
+          console.log('Data channel opened');
+          connectionStatus = 'p2p';
+          updateConnectionStatus();
+        };
+
+        webrtcDataChannel.onmessage = (event) => {
+          console.log('Data channel message:', event.data);
+        };
+      };
+    }
+
+    async function handleOffer(offer) {
+      try {
+        console.log('Setting remote description with offer:', offer);
+        await webrtcConnection.setRemoteDescription({
+          type: 'offer',
+          sdp: offer.sdp
+        });
+        console.log('Creating answer...');
+        const answer = await webrtcConnection.createAnswer();
+        console.log('Setting local description with answer...');
+        await webrtcConnection.setLocalDescription(answer);
+
+        console.log('Sending answer to server...');
+        webrtcWebSocket.send(JSON.stringify({
+          type: 'answer',
+          answer: {
+            sdp: answer.sdp,
+            session_id: webrtcSessionId
+          }
+        }));
+        console.log('Answer sent successfully');
+      } catch (error) {
+        console.error('Error in handleOffer:', error);
+        throw error;
+      }
+    }
+
+    function updateConnectionStatus() {
+      const statusElement = document.getElementById('connection-status');
+      if (!statusElement) return;
+
+      switch (connectionStatus) {
+        case 'connecting':
+          statusElement.innerHTML = '🔄 Connecting via P2P...';
+          statusElement.className = 'text-sm text-yellow-400 mb-2';
+          break;
+        case 'p2p':
+          statusElement.innerHTML = '🚀 Connected via P2P • Direct transfer';
+          statusElement.className = 'text-sm text-green-400 mb-2';
+          break;
+        case 'http':
+          statusElement.innerHTML = '🌐 Using HTTP relay • Stable connection';
+          statusElement.className = 'text-sm text-blue-400 mb-2';
+          break;
+        default:
+          statusElement.innerHTML = '';
+          break;
+      }
+    }
+
+    // Try to initialize WebRTC on page load
+    console.log('Page loaded, trying to initialize WebRTC...');
+    initWebRTC().catch(error => {
+      console.log('WebRTC initialization failed, will use HTTP fallback:', error);
+      connectionStatus = 'http';
+      updateConnectionStatus();
+    });
 
     // --- Drag & Drop functionality ---
     // Click to browse

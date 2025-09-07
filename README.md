@@ -4,12 +4,12 @@ A fast, secure resumable file receiver with Cloudflare Tunnel integration for ea
 
 ## Features
 
-- ✅ **Resumable Uploads**: Chunk-based uploads with automatic resume on connection loss
-- 🌐 **Cloudflare Tunnel**: Zero-config external access via `{hash}.drcv.app`  
-- 🔄 **Real-time Dashboard**: Live upload progress monitoring
-- 🛡️ **Security**: IP-based isolation, heartbeat monitoring, automatic cleanup
-- 📱 **Cross-platform**: macOS, Linux, Windows support
-- 📊 **Structured Logging**: Built-in log levels and RUST_LOG support
+- **Resumable Uploads**: Chunk-based uploads with automatic resume on connection loss
+- **Cloudflare Tunnel**: Zero-config external access via `{hash}.drcv.app`  
+- **Real-time Dashboard**: Live upload progress monitoring
+- **Security**: IP-based isolation, heartbeat monitoring, automatic cleanup
+- **Cross-platform**: macOS, Linux, Windows support
+- **Structured Logging**: Built-in log levels and RUST_LOG support
 
 ## Quick Start
 

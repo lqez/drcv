@@ -14,6 +14,7 @@ use log::{info, warn, error};
 use config::Args;
 use tunnels::{TunnelConfig, create_tunnel_provider};
 use apps::{admin::TunnelInfo, upload::create_app as create_upload_app, admin::create_app as create_admin_app};
+use apps::webrtc::WebRTCServer;
 
 #[tokio::main]
 async fn main() {
@@ -31,8 +32,21 @@ async fn main() {
     let pool = initialize_database().await;
     let tunnel_info = Arc::new(RwLock::new(TunnelInfo { hostname: None }));  
     let tunnel_runner = setup_tunnel(&pool, &config, &tunnel_info).await;
+    
+    // Initialize WebRTC server
+    let webrtc_server = Arc::new(match WebRTCServer::new().await {
+        Ok(server) => {
+            info!("WebRTC server initialized");
+            server
+        }
+        Err(e) => {
+            error!("Failed to initialize WebRTC server: {}", e);
+            std::process::exit(1);
+        }
+    });
+    
     let shutdown_tx = start_background_tasks(&pool, &config, tunnel_runner);
-    let upload_task = create_upload_app(&pool, &config, &shutdown_tx).await;
+    let upload_task = create_upload_app(&pool, &config, &webrtc_server, &shutdown_tx).await;
     let admin_task = create_admin_app(&pool, &config, &tunnel_info, &shutdown_tx).await;
     
     info!("DRCV is ready");
@@ -98,10 +112,18 @@ fn start_background_tasks(pool: &SqlitePool, config: &config::AppConfig, tunnel_
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
         info!("Shutting down…");
-        if let Some(runner) = tunnel_runner { let _ = runner.shutdown().await; }
+        
+        // Gracefully shutdown services
+        if let Some(runner) = tunnel_runner { 
+            let _ = runner.shutdown().await; 
+        }
         let _ = shutdown_tx_clone.send(());
+        
+        // Give a short grace period for cleanup
         tokio::time::sleep(config_shutdown).await;
-        info!("Shutting down. Bye!");
+        info!("Shutdown complete. Bye!");
+        
+        // Force exit to avoid any hanging tasks
         std::process::exit(0);
     });
     
@@ -119,28 +141,25 @@ fn start_background_tasks(pool: &SqlitePool, config: &config::AppConfig, tunnel_
     shutdown_tx
 }
 
+
 async fn wait_for_shutdown_signal() {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-    use tokio::signal;
-
-    let ctrl_c = async {
-        let _ = signal::ctrl_c().await;
-    };
-
-    let stdin_quit = async {
-        let mut reader = BufReader::new(tokio::io::stdin());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break, // EOF
-                Ok(_) => {
-                    if line.trim().eq_ignore_ascii_case("q") { break; }
-                }
-                Err(_e) => break,
-            }
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT handler");
+        
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
         }
-    };
-
-    tokio::select! { _ = ctrl_c => {}, _ = stdin_quit => {} }
+    }
+    
+    #[cfg(not(unix))]
+    {
+        use tokio::signal;
+        let _ = signal::ctrl_c().await;
+        info!("Received Ctrl+C signal");
+    }
 }
