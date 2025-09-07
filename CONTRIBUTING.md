@@ -5,33 +5,50 @@
 ### Prerequisites
 - Rust 1.70+
 - SQLite 3
+- (Optional) cloudflared for tunnel functionality
 
 ### Building
 ```bash
 cargo build
 cargo test
 cargo run -- --help
+
+# With logging
+RUST_LOG=debug cargo run -- --verbose
 ```
 
-### File Structure
+### Project Structure
 
 ```
 drcv/
 ├── src/
-│   ├── main.rs          # Main application and CLI
-│   ├── db.rs            # SQLite database operations
-│   ├── upload.rs        # Upload handling and chunking
-│   ├── admin.rs         # Admin dashboard API
-│   └── tunnel.rs        # Tunnel client for external access
-├── tunnel-server/       # Cloudflare Workers tunnel server
-│   ├── worker.js        # Main tunnel server logic
-│   ├── setup.sh         # Setup script
-│   └── deploy.sh        # Deployment script
-├── static/
-│   ├── index.html       # Upload interface
-│   └── admin.html       # Admin dashboard
-└── README.md
+│   ├── main.rs              # Main application entry point
+│   ├── config.rs            # CLI arguments and app configuration
+│   ├── db.rs                # SQLite database operations
+│   ├── upload.rs            # Upload handling and chunking logic
+│   ├── admin.rs             # Admin dashboard API endpoints
+│   ├── utils.rs             # Utility functions (time, string conversion)
+│   ├── apps/                # App creation modules
+│   │   ├── mod.rs           # Apps module declarations
+│   │   ├── upload.rs        # Upload app and server creation
+│   │   └── admin.rs         # Admin app and server creation
+│   ├── tunnels/             # Tunnel provider implementations
+│   │   ├── mod.rs           # Tunnel traits and provider factory
+│   │   └── cloudflare.rs    # Cloudflare Tunnel implementation
+│   └── static/              # Static web assets
+│       ├── index.html       # Upload interface
+│       └── admin.html       # Admin dashboard
+└── Cargo.toml
 ```
+
+### Dependencies
+- **axum**: Web framework
+- **sqlx**: SQLite database interface
+- **tokio**: Async runtime
+- **clap**: CLI argument parsing
+- **log + env_logger**: Structured logging
+- **serde + serde_json**: Serialization
+- **chrono**: Date/time handling
 
 ### Database Schema
 ```sql
@@ -44,6 +61,19 @@ CREATE TABLE uploads (
     started_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     completed_at TEXT
+);
+
+CREATE TABLE clients (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_ip   TEXT NOT NULL,
+    user_agent  TEXT NOT NULL,
+    status      TEXT NOT NULL,  -- 'connected' | 'disconnected'
+    last_seen   TEXT NOT NULL
+);
+
+CREATE TABLE kv_store (
+    key     TEXT PRIMARY KEY,
+    value   TEXT NOT NULL
 );
 ```
 
@@ -83,29 +113,60 @@ Keep upload session alive.
 ##### `GET /data?page=<n>&q=<search>`
 Get upload history with pagination and search.
 
+##### `GET /clients`
+Get connected clients list.
+
+##### `GET /tunnel`
+Get tunnel hostname information.
+
 ##### `GET /events`
 Server-Sent Events stream for real-time updates.
 
-### Tunnel Server Setup
+### Logging
 
-DRCV includes a Cloudflare Workers-based tunnel server for external access.
+DRCV uses the standard Rust logging ecosystem:
 
-#### Deploy Your Own Tunnel Server
-```bash
-cd tunnel-server
-./setup.sh    # One-time setup
-./deploy.sh   # Deploy updates
+```rust
+use log::{info, warn, error, debug};
+
+info!("Server started");
+warn!("Upload timeout detected");  
+error!("Database connection failed");
+debug!("Processing chunk {}", chunk_id);
 ```
 
-See [tunnel-server/README.md](tunnel-server/README.md) for detailed setup instructions.
+Log levels can be controlled via:
+- `--verbose` flag (enables DEBUG level)
+- `RUST_LOG` environment variable
 
-## Contributing
+### Tunnel System
+
+The tunnel system uses a trait-based architecture:
+
+```rust
+#[async_trait]
+pub trait TunnelProvider: Send + Sync {
+    async fn ensure(&self, db: &SqlitePool, config: &TunnelConfig) -> Result<Box<dyn TunnelManager>, TunnelError>;
+}
+```
+
+Currently supports:
+- **Cloudflare Tunnel**: Direct `cloudflared` integration
+
+### Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests if applicable
-5. Submit a pull request
+5. Run `cargo check` and `cargo test`
+6. Submit a pull request
+
+### Code Style
+- Use `cargo fmt` for formatting
+- Follow Rust naming conventions
+- Add logging at appropriate levels
+- Document public APIs
 
 ## License
 
